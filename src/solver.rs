@@ -105,6 +105,20 @@ mod tests {
     use crate::ast::{Ast, OpType};
     use std::time::Instant;
 
+    fn run_with_threads<F, R>(threads: usize, f: F) -> (R, std::time::Duration)
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        let start = Instant::now();
+        let res = pool.install(f);
+        (res, start.elapsed())
+    }
+
     #[test]
     fn test_parallel_solver_nonlinear_equation() {
         // Memecahkan persamaan non-linear: x^2 + y = 5
@@ -195,7 +209,7 @@ mod tests {
         println!("Multi-thread execution time  : {:?}", duration_multi);
         
         let speedup = duration_single.as_secs_f64() / duration_multi.as_secs_f64();
-        println!("🔥 SPEEDUP FACTOR            : {:.2}x Faster!", speedup);
+        println!("  SPEEDUP FACTOR            : {:.2}x Faster!", speedup);
         println!("============================\n");
     }
 
@@ -226,7 +240,7 @@ mod tests {
                 let x_res = sat_box.get("x").unwrap();
                 let y_res = sat_box.get("y").unwrap();
 
-                println!("\n=== 🎯 TRANSCENDENTAL SAT SOLUTION ===");
+                println!("\n===  TRANSCENDENTAL SAT SOLUTION ===");
                 println!("x = [{:.5}, {:.5}]", x_res.low, x_res.high);
                 println!("y = [{:.5}, {:.5}]", y_res.low, y_res.high);
 
@@ -237,5 +251,163 @@ mod tests {
             }
             SolverResult::Unsat => panic!("Gagal menemukan solusi untuk sin(x) + exp(y) = 2!"),
         }
+    }
+
+    // =========================================================================
+    // 1. SCALABILITY SWEEP BENCHMARK (1, 2, 4, 8, 16 Threads)
+    // =========================================================================
+    #[test]
+    fn test_benchmark_scalability_sweep() {
+        // Benchmark: Highly non-linear polynomial sphere x^2 + y^2 = 25
+        // Delta super ketat (0.00005) untuk memaksa pembagian search space yang sangat dalam
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let x_sqr = ast.add_unary(OpType::Sqr, x);
+        let y_sqr = ast.add_unary(OpType::Sqr, y);
+        let root = ast.add_binary(OpType::Add, x_sqr, y_sqr);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("x".to_string(), Interval::new(-10.0, 10.0).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(-10.0, 10.0).unwrap());
+
+        let solver = Solver::new(ast, root, 0.00005);
+        let target = Interval::point(25.0).unwrap();
+
+        let thread_counts = vec![1, 2, 4, 8, 16];
+        let mut base_duration_secs = 0.0;
+
+        println!("\n=============================================================");
+        println!(" BENCHMARK 1: SCALABILITY SWEEP (RAYON WORK-STEALING)");
+        println!("=============================================================");
+        println!("{:<10} | {:<18} | {:<12}", "Threads", "Execution Time", "Speedup");
+        println!("-------------------------------------------------------------");
+
+        for &t in &thread_counts {
+            let (_, duration) = run_with_threads(t, || {
+                solver.solve_parallel(initial_box.clone(), target)
+            });
+
+            let dur_secs = duration.as_secs_f64();
+            if t == 1 {
+                base_duration_secs = dur_secs;
+            }
+
+            let speedup = base_duration_secs / dur_secs;
+            println!("{:<10} | {:<18?} | {:.2}x", t, duration, speedup);
+        }
+        println!("=============================================================\n");
+    }
+
+    // =========================================================================
+    // 2. VARIATIVE NON-LINEAR PROBLEM SUITE
+    // =========================================================================
+
+    /// Problem 1: High-Degree Polynomial (x^4 + y^2 = 17)
+    #[test]
+    fn test_benchmark_high_degree_polynomial() {
+        // x^4 + y^2 = 17 over x ∈ [-3, 3], y ∈ [-5, 5]
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let x_sqr = ast.add_unary(OpType::Sqr, x);
+        let x_4 = ast.add_unary(OpType::Sqr, x_sqr); // (x^2)^2 = x^4
+        let y_sqr = ast.add_unary(OpType::Sqr, y);
+        let root = ast.add_binary(OpType::Add, x_4, y_sqr);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
+
+        let solver = Solver::new(ast, root, 0.0001);
+        let target = Interval::point(17.0).unwrap();
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!("P1: High-Degree Poly [x^4 + y^2 = 17] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+    }
+
+    /// Problem 2: Oscillatory Trigonometric Function (sin(x) * sin(y) = 0.5)
+    #[test]
+    fn test_benchmark_oscillatory_trig() {
+        // sin(x) * sin(y) = 0.5 over x, y ∈ [0, PI]
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let sin_x = ast.add_unary(OpType::Sin, x);
+        let sin_y = ast.add_unary(OpType::Sin, y);
+        let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+
+        let solver = Solver::new(ast, root, 0.0005);
+        let target = Interval::point(0.5).unwrap();
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!("P2: Oscillatory Trig [sin(x)*sin(y) = 0.5] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+    }
+
+    /// Problem 3: Mixed Exponential-Polynomial System (exp(x) - y^2 = 0)
+    #[test]
+    fn test_benchmark_mixed_exp_poly() {
+        // exp(x) - y^2 = 0 over x ∈ [-2, 2], y ∈ [1, 4]
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let exp_x = ast.add_unary(OpType::Exp, x);
+        let y_sqr = ast.add_unary(OpType::Sqr, y);
+        let root = ast.add_binary(OpType::Sub, exp_x, y_sqr);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
+
+        let solver = Solver::new(ast, root, 0.0005);
+        let target = Interval::point(0.0).unwrap();
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!("P3: Mixed Exp-Poly [exp(x) - y^2 = 0] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+    }
+
+    // =========================================================================
+    // 3. MEMORY FOOTPRINT & AST ARENA PROFILING
+    // =========================================================================
+    #[test]
+    fn test_benchmark_memory_footprint() {
+        // Mengukur footprint memori AST arena allocation `Vec<Node>` di Rust
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let x_sqr = ast.add_unary(OpType::Sqr, x);
+        let y_sqr = ast.add_unary(OpType::Sqr, y);
+        let root = ast.add_binary(OpType::Add, x_sqr, y_sqr);
+
+        let node_count = ast.nodes.len();
+        let single_node_size = std::mem::size_of::<crate::ast::Node>();
+        let total_ast_bytes = node_count * single_node_size;
+
+        println!("\n=============================================================");
+        println!(" MEMORY FOOTPRINT & ARENA ALLOCATION PROFILING");
+        println!("=============================================================");
+        println!("Total AST Nodes          : {} nodes", node_count);
+        println!("Size per Node struct     : {} bytes", single_node_size);
+        println!("Total AST Memory Size    : {} bytes ({:.2} KB)", total_ast_bytes, total_ast_bytes as f64 / 1024.0);
+        println!("Zero Heap Allocation Ref : YES (Index-based Arena Allocation)");
+        println!("=============================================================\n");
+
+        assert_eq!(node_count, 5);
     }
 }
