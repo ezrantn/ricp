@@ -67,6 +67,47 @@ impl Solver {
         (left_box, right_box)
     }
 
+    /// Menghitung Sensitivitas Variabel berdasarkan bobot/frekuensi di AST
+    pub fn get_variable_sensitivity(&self, var_name: &str) -> f64 {
+        let mut count = 0.0;
+        for node in &self.ast.nodes {
+            if let crate::ast::NodeKind::Variable(ref name) = node.kind {
+                if name == var_name {
+                    count += 1.0;
+                }
+            }
+        }
+        // Variabel yang muncul lebih sering di AST punya sensitivitas lebih tinggi
+        if count == 0.0 { 1.0 } else { count }
+    }
+
+    /// Implementasi Sensitivity-Aware Variable Selection sesuai Paper!
+    pub fn split_sensitive_variable(&self, box_region: &BoxRegion) -> (BoxRegion, BoxRegion) {
+        let best_var = box_region
+            .iter()
+            .max_by(|(k_a, inv_a), (k_b, inv_b)| {
+                let score_a = inv_a.width() * self.get_variable_sensitivity(k_a);
+                let score_b = inv_b.width() * self.get_variable_sensitivity(k_b);
+                score_a.partial_cmp(&score_b).unwrap()
+            })
+            .map(|(k, _)| k.clone())
+            .expect("BoxRegion tidak boleh kosong");
+
+        let inv = box_region.get(&best_var).unwrap();
+        let mid = inv.mid();
+
+        let left_inv = Interval::new(inv.low, mid).unwrap();
+        let right_inv = Interval::new(mid, inv.high).unwrap();
+
+        let mut left_box = box_region.clone();
+        let mut right_box = box_region.clone();
+
+        left_box.insert(best_var.clone(), left_inv);
+        right_box.insert(best_var, right_inv);
+
+        (left_box, right_box)
+    }
+
     /// Core Parallel Branch-and-Prune Loop (Rayon Fork-Join)
     pub fn solve_parallel(&self, current_box: BoxRegion, target: Interval) -> SolverResult {
         // 1. Contract Step
@@ -81,7 +122,7 @@ impl Solver {
         }
 
         // 3. Branching Step
-        let (left_box, right_box) = self.split_widest_variable(&contracted_box);
+        let (left_box, right_box) = self.split_sensitive_variable(&contracted_box);
 
         // 4. Rayon Work-Stealing Parallelism!
         // Kedua cabang dikirim ke thread pool Rayon secara concurrent
