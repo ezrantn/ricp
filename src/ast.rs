@@ -283,7 +283,7 @@ mod tests {
         // Misal membuat ekspresi: x^2 + y
         // x ∈ [2, 3], y ∈ [1, 5]
         let mut ast = Ast::new();
-        
+
         let x = ast.add_variable("x");
         let y = ast.add_variable("y");
         let x_sqr = ast.add_unary(OpType::Sqr, x);

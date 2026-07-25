@@ -17,7 +17,11 @@ pub struct Solver {
 
 impl Solver {
     pub fn new(ast: Ast, root_node: usize, delta: f64) -> Self {
-        Self { ast, root_node, delta }
+        Self {
+            ast,
+            root_node,
+            delta,
+        }
     }
 
     /// Menjalankan Contraction 1 siklus penuh (Forward + Backward)
@@ -165,7 +169,7 @@ mod tests {
         // Memecahkan persamaan non-linear: x^2 + y = 5
         // Domain awal yang sangat luas: x ∈ [0, 10], y ∈ [0, 10]
         // Presisi delta = 0.01
-        
+
         let mut ast = Ast::new();
         let x = ast.add_variable("x");
         let y = ast.add_variable("y");
@@ -196,7 +200,10 @@ mod tests {
                 let y_mid = y_res.mid();
                 let approx = x_mid * x_mid + y_mid;
 
-                assert!((approx - 5.0).abs() < 0.05, "Solusi terbukti memenuhi x^2 + y = 5!");
+                assert!(
+                    (approx - 5.0).abs() < 0.05,
+                    "Solusi terbukti memenuhi x^2 + y = 5!"
+                );
             }
             SolverResult::Unsat => panic!("Harusnya SAT tapi ter-UNSAT!"),
         }
@@ -208,7 +215,7 @@ mod tests {
         // Persamaan: x^2 + y^2 = 25 (Lingkaran)
         // Domain luas: x ∈ [-10, 10], y ∈ [-10, 10]
         // Presisi delta ketat = 0.0001 (memaksa jutaan/ratusan ribu pembagian box)
-        
+
         let mut ast = Ast::new();
         let x = ast.add_variable("x");
         let y = ast.add_variable("y");
@@ -226,12 +233,14 @@ mod tests {
         // ----------------------------------------------------
         // 1. RUNNING SINGLE-THREADED (Memaksa Rayon pakai 1 thread)
         // ----------------------------------------------------
-        let pool_single = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-        
+        let pool_single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+
         let start_single = Instant::now();
-        let _res_single = pool_single.install(|| {
-            solver.solve_parallel(initial_box.clone(), target)
-        });
+        let _res_single =
+            pool_single.install(|| solver.solve_parallel(initial_box.clone(), target));
         let duration_single = start_single.elapsed();
 
         // ----------------------------------------------------
@@ -248,7 +257,7 @@ mod tests {
         println!("\n=== 📊 BENCHMARK RESULTS ===");
         println!("Single-thread execution time : {:?}", duration_single);
         println!("Multi-thread execution time  : {:?}", duration_multi);
-        
+
         let speedup = duration_single.as_secs_f64() / duration_multi.as_secs_f64();
         println!("  SPEEDUP FACTOR            : {:.2}x Faster!", speedup);
         println!("============================\n");
@@ -268,7 +277,10 @@ mod tests {
         let root = ast.add_binary(OpType::Add, sin_x, exp_y);
 
         let mut initial_box = BoxRegion::new();
-        initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
+        initial_box.insert(
+            "x".to_string(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+        );
         initial_box.insert("y".to_string(), Interval::new(-2.0, 2.0).unwrap());
 
         let solver = Solver::new(ast, root, 0.001);
@@ -321,13 +333,15 @@ mod tests {
         println!("\n=============================================================");
         println!(" BENCHMARK 1: SCALABILITY SWEEP (RAYON WORK-STEALING)");
         println!("=============================================================");
-        println!("{:<10} | {:<18} | {:<12}", "Threads", "Execution Time", "Speedup");
+        println!(
+            "{:<10} | {:<18} | {:<12}",
+            "Threads", "Execution Time", "Speedup"
+        );
         println!("-------------------------------------------------------------");
 
         for &t in &thread_counts {
-            let (_, duration) = run_with_threads(t, || {
-                solver.solve_parallel(initial_box.clone(), target)
-            });
+            let (_, duration) =
+                run_with_threads(t, || solver.solve_parallel(initial_box.clone(), target));
 
             let dur_secs = duration.as_secs_f64();
             if t == 1 {
@@ -364,11 +378,17 @@ mod tests {
         let target = Interval::point(17.0).unwrap();
 
         let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
-        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
-        println!("P1: High-Degree Poly [x^4 + y^2 = 17] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+        println!(
+            "P1: High-Degree Poly [x^4 + y^2 = 17] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
     }
 
     /// Problem 2: Oscillatory Trigonometric Function (sin(x) * sin(y) = 0.5)
@@ -383,18 +403,30 @@ mod tests {
         let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
 
         let mut initial_box = BoxRegion::new();
-        initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
-        initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+        initial_box.insert(
+            "x".to_string(),
+            Interval::new(0.0, std::f64::consts::PI).unwrap(),
+        );
+        initial_box.insert(
+            "y".to_string(),
+            Interval::new(0.0, std::f64::consts::PI).unwrap(),
+        );
 
         let solver = Solver::new(ast, root, 0.0005);
         let target = Interval::point(0.5).unwrap();
 
         let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
-        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
-        println!("P2: Oscillatory Trig [sin(x)*sin(y) = 0.5] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+        println!(
+            "P2: Oscillatory Trig [sin(x)*sin(y) = 0.5] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
     }
 
     /// Problem 3: Mixed Exponential-Polynomial System (exp(x) - y^2 = 0)
@@ -416,11 +448,17 @@ mod tests {
         let target = Interval::point(0.0).unwrap();
 
         let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
-        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || solver.solve_parallel(initial_box, target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
-        println!("P3: Mixed Exp-Poly [exp(x) - y^2 = 0] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64());
+        println!(
+            "P3: Mixed Exp-Poly [exp(x) - y^2 = 0] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
     }
 
     // =========================================================================
@@ -445,7 +483,11 @@ mod tests {
         println!("=============================================================");
         println!("Total AST Nodes          : {} nodes", node_count);
         println!("Size per Node struct     : {} bytes", single_node_size);
-        println!("Total AST Memory Size    : {} bytes ({:.2} KB)", total_ast_bytes, total_ast_bytes as f64 / 1024.0);
+        println!(
+            "Total AST Memory Size    : {} bytes ({:.2} KB)",
+            total_ast_bytes,
+            total_ast_bytes as f64 / 1024.0
+        );
         println!("Zero Heap Allocation Ref : YES (Index-based Arena Allocation)");
         println!("=============================================================\n");
 

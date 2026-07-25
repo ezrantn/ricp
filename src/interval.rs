@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul, Div};
+use std::ops::{Add, Div, Mul, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interval {
@@ -46,7 +46,7 @@ impl Interval {
     }
 
     // --- DIRECTED ROUNDING HELPERS ---
-    
+
     /// Mengarahkan rounding ke bawah (-infinity)
     #[inline]
     pub fn round_down(val: f64) -> f64 {
@@ -84,7 +84,11 @@ impl Interval {
         if self.high < 0.0 {
             None // Tidak ada domain riil
         } else {
-            let low = if self.low <= 0.0 { 0.0 } else { Self::round_down(self.low.sqrt()) };
+            let low = if self.low <= 0.0 {
+                0.0
+            } else {
+                Self::round_down(self.low.sqrt())
+            };
             let high = Self::round_up(self.high.sqrt());
             Self::new(low, high)
         }
@@ -220,7 +224,7 @@ mod tests {
     fn test_unsat_intersection() {
         let a = Interval::new(1.0, 2.0).unwrap();
         let b = Interval::new(3.0, 4.0).unwrap();
-        
+
         // Interseksi interval terpisah harus menghasilkan None (Conflict/UNSAT)
         assert_eq!(a.intersect(&b), None);
     }
@@ -229,7 +233,7 @@ mod tests {
     fn test_sqr_contains_zero() {
         let a = Interval::new(-2.0, 3.0).unwrap();
         let sq = a.sqr();
-        
+
         // [-2, 3]^2 harus menghasilkan [0, 9] (dengan rounding up pada 9)
         assert_eq!(sq.low, 0.0);
         assert!(sq.high >= 9.0);
@@ -247,8 +251,14 @@ mod tests {
         let raw_sum_high = a.high + b.high;
 
         // Direct rounding HARUS memperlebar batas dari kalkulasi mentah f64
-        assert!(c.low < raw_sum_low, "low bound harus ditarik ke bawah oleh next_down()");
-        assert!(c.high > raw_sum_high, "high bound harus ditarik ke atas oleh next_up()");
+        assert!(
+            c.low < raw_sum_low,
+            "low bound harus ditarik ke bawah oleh next_down()"
+        );
+        assert!(
+            c.high > raw_sum_high,
+            "high bound harus ditarik ke atas oleh next_up()"
+        );
 
         // 2. c.low dijamin <= 0.3 f64 literal
         assert!(c.low <= 0.3);
@@ -271,7 +281,7 @@ mod tests {
     #[test]
     fn test_multiplication_all_sign_quadrants() {
         // ICP sering memproses interval dengan kombinasi tanda (+/-) yang bervariasi.
-        
+
         // Positif x Positif
         let p1 = Interval::new(2.0, 3.0).unwrap() * Interval::new(4.0, 5.0).unwrap();
         assert!(p1.low <= 8.0 && p1.high >= 15.0);
@@ -308,7 +318,7 @@ mod tests {
     fn test_division_by_zero_contains_zero_returns_none() {
         let a = Interval::new(1.0, 5.0).unwrap();
         let zero_interval = Interval::new(-1.0, 1.0).unwrap();
-        
+
         // Di ICP sederhana, membagi dengan interval yang memuat 0 harus ditolak/dihanling khusus
         assert_eq!(a / zero_interval, None);
     }
@@ -322,7 +332,7 @@ mod tests {
         // Scenario: [-3, 2]^2 -> Nilai terkecil pasti 0, nilai terbesar max((-3)^2, 2^2) = 9
         let a = Interval::new(-3.0, 2.0).unwrap();
         let res = a.sqr();
-        
+
         assert_eq!(res.low, 0.0);
         assert!(res.high >= 9.0);
     }
