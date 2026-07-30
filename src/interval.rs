@@ -23,22 +23,26 @@ impl Interval {
     }
 
     /// Lebar dari interval (width)
+    #[inline]
     pub fn width(&self) -> f64 {
         self.high - self.low
     }
 
     /// Titik tengah interval (midpoint)
+    #[inline]
     pub fn mid(&self) -> f64 {
         0.5 * (self.low + self.high)
     }
 
     /// Cek apakah interval berisi titik 0
+    #[inline]
     pub fn contains_zero(&self) -> bool {
         self.low <= 0.0 && self.high >= 0.0
     }
 
     /// Interseksi dua interval [A] ∩ [B]
     /// Krusial untuk proses Contraction/Pruning!
+    #[inline]
     pub fn intersect(&self, other: &Self) -> Option<Self> {
         let new_low = self.low.max(other.low);
         let new_high = self.high.min(other.high);
@@ -62,12 +66,14 @@ impl Interval {
     // --- OPERASI KHUSUS NON-LINEAR (Phase 1+) ---
 
     /// Operasi Kuadrat: [x]^2
+    #[inline]
     pub fn sqr(&self) -> Self {
         if self.contains_zero() {
-            let max_val = self.low.abs().max(self.high.abs());
+            let h2_a = self.low * self.low;
+            let h2_b = self.high * self.high;
             Self {
                 low: 0.0,
-                high: Self::round_up(max_val * max_val),
+                high: Self::round_up(h2_a.max(h2_b)),
             }
         } else {
             let l2 = self.low * self.low;
@@ -141,6 +147,7 @@ impl Interval {
 impl Add for Interval {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self::Output {
         Self {
             low: Interval::round_down(self.low + rhs.low),
@@ -152,6 +159,7 @@ impl Add for Interval {
 impl Sub for Interval {
     type Output = Self;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
             low: Interval::round_down(self.low - rhs.high),
@@ -163,18 +171,74 @@ impl Sub for Interval {
 impl Mul for Interval {
     type Output = Self;
 
+    #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        let p1 = self.low * rhs.low;
-        let p2 = self.low * rhs.high;
-        let p3 = self.high * rhs.low;
-        let p4 = self.high * rhs.high;
+        if self.low >= 0.0 {
+            if rhs.low >= 0.0 {
+                // Case 1: [+ +] * [+ +]
+                Self {
+                    low: Self::round_down(self.low * rhs.low),
+                    high: Self::round_up(self.high * rhs.high),
+                }
+            } else if rhs.high <= 0.0 {
+                // Case 2: [+ +] * [- -]
+                Self {
+                    low: Self::round_down(self.high * rhs.low),
+                    high: Self::round_up(self.low * rhs.high),
+                }
+            } else {
+                // Case 3: [+ +] * [- +]
+                Self {
+                    low: Self::round_down(self.high * rhs.low),
+                    high: Self::round_up(self.high * rhs.high),
+                }
+            }
+        } else if self.high <= 0.0 {
+            if rhs.low >= 0.0 {
+                // Case 4: [- -] * [+ +]
+                Self {
+                    low: Self::round_down(self.low * rhs.high),
+                    high: Self::round_up(self.high * rhs.low),
+                }
+            } else if rhs.high <= 0.0 {
+                // Case 5: [- -] * [- -]
+                Self {
+                    low: Self::round_down(self.high * rhs.high),
+                    high: Self::round_up(self.low * rhs.low),
+                }
+            } else {
+                // Case 6: [- -] * [- +]
+                Self {
+                    low: Self::round_down(self.low * rhs.high),
+                    high: Self::round_up(self.low * rhs.low),
+                }
+            }
+        } else {
+            if rhs.low >= 0.0 {
+                // Case 7: [- +] * [+ +]
+                Self {
+                    low: Self::round_down(self.low * rhs.high),
+                    high: Self::round_up(self.high * rhs.high),
+                }
+            } else if rhs.high <= 0.0 {
+                // Case 8: [- +] * [- -]
+                Self {
+                    low: Self::round_down(self.high * rhs.low),
+                    high: Self::round_up(self.low * rhs.low),
+                }
+            } else {
+                // Case 9: [- +] * [- +] (Kedua interval melintasi angka 0)
+                // Hanya di kasus ini kita butuh 4 perkalian & min/max
+                let p1 = self.low * rhs.low;
+                let p2 = self.low * rhs.high;
+                let p3 = self.high * rhs.low;
+                let p4 = self.high * rhs.high;
 
-        let min_p = p1.min(p2).min(p3.min(p4));
-        let max_p = p1.max(p2).max(p3.max(p4));
-
-        Self {
-            low: Interval::round_down(min_p),
-            high: Interval::round_up(max_p),
+                Self {
+                    low: Self::round_down(p2.min(p3)),
+                    high: Self::round_up(p1.max(p4)),
+                }
+            }
         }
     }
 }
@@ -182,6 +246,7 @@ impl Mul for Interval {
 impl Div for Interval {
     type Output = Option<Self>;
 
+    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.contains_zero() {
             // Pembagian dengan interval yang memuat 0 menghasilkan interval tak hingga.
