@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use crate::ast::{Ast, BoxRegion, NodeKind};
 use crate::interval::Interval;
-use rayon::prelude::*;
 
-/// Hasil dari SMT Solver Engine
+/// Result from SMT Solver Engine
 #[derive(Debug, PartialEq, Clone)]
 pub enum SolverResult {
     Sat(BoxRegion),
@@ -14,7 +13,7 @@ pub enum SolverResult {
 pub struct Solver {
     pub ast: Ast,
     pub root_node: usize,
-    pub delta: f64, // Presisi target (misal 0.001)
+    pub delta: f64, // Target precision (e.g. 0.001)
     pub sensitivity_map: HashMap<String, f64>,
 }
 
@@ -34,7 +33,7 @@ impl Solver {
         }
     }
 
-    /// Menjalankan Contraction 1 siklus penuh (Forward + Backward)
+    /// Run a single contraction cycle (Forward + Backward)
     pub fn contract(&self, mut box_region: BoxRegion, target: Interval) -> Option<BoxRegion> {
         let mut ast = self.ast.clone();
 
@@ -51,31 +50,31 @@ impl Solver {
         }
     }
 
-    /// Memeriksa apakah SEMUA interval variabel di BoxRegion sudah <= delta
+    /// Check if all variable intervals are small enough (width <= delta)
     #[inline]
-    pub fn is_small_enough(&self, box_region: &BoxRegion) -> bool {
+    fn _is_small_enough(&self, box_region: &BoxRegion) -> bool {
         box_region.values().all(|inv| inv.width() <= self.delta)
     }
 
-    /// Menghitung Sensitivitas Variabel berdasarkan bobot/frekuensi di AST
+    /// Get the sensitivity of a variable (weight/frequency from AST)
     #[inline]
-    pub fn get_sensitivity(&self, var_name: &str) -> f64 {
+    fn _get_sensitivity(&self, var_name: &str) -> f64 {
         *self.sensitivity_map.get(var_name).unwrap_or(&1.0)
     }
 
-    /// Mencari variabel dengan interval paling lebar untuk di-branch (bisection)
+    /// Find the widest variable to branch on (bisection)
     pub fn split_widest_variable(&self, box_region: &BoxRegion) -> (BoxRegion, BoxRegion) {
-        // Cari nama variabel dengan width terbesar
+        // Find the widest variable by width
         let widest_var = box_region
             .iter()
             .max_by(|a, b| a.1.width().partial_cmp(&b.1.width()).unwrap())
             .map(|(k, _)| k.clone())
-            .expect("BoxRegion tidak boleh kosong");
+            .expect("BoxRegion cannot be empty");
 
         let inv = box_region.get(&widest_var).unwrap();
         let mid = inv.mid();
 
-        // Belah dua: [low, mid] dan [mid, high]
+        // Split the widest variable into two: [low, mid] and [mid, high]
         let left_inv = Interval::new(inv.low, mid).unwrap();
         let right_inv = Interval::new(mid, inv.high).unwrap();
 
@@ -88,13 +87,13 @@ impl Solver {
         (left_box, right_box)
     }
 
-    /// Implementasi Sensitivity-Aware Variable Selection sesuai Paper!
+    /// Find the sensitive variable to branch on (bisection)
     pub fn split_sensitive_variable(&self, box_region: &BoxRegion) -> (BoxRegion, BoxRegion) {
         let (best_var, inv) = box_region
             .iter()
             .max_by(|(k_a, inv_a), (k_b, inv_b)| {
-                let score_a = inv_a.width() * self.get_sensitivity(k_a);
-                let score_b = inv_b.width() * self.get_sensitivity(k_b);
+                let score_a = inv_a.width() * self._get_sensitivity(k_a);
+                let score_b = inv_b.width() * self._get_sensitivity(k_b);
                 score_a.partial_cmp(&score_b).unwrap()
             })
             .expect("BoxRegion cannot be empty");
@@ -106,7 +105,7 @@ impl Solver {
         let mut left_box = box_region.clone();
         let mut right_box = box_region.clone();
 
-        // Overwrite langsung di tempat
+        // Overwrite the sensitive variable in both boxes
         left_box.insert(best_var.clone(), left_inv);
         right_box.insert(best_var.clone(), right_inv);
 
@@ -131,15 +130,15 @@ impl Solver {
         };
 
         // 2. Stopping Condition Check
-        if self.is_small_enough(&contracted_box) {
+        if self._is_small_enough(&contracted_box) {
             return SolverResult::Sat(contracted_box);
         }
 
         // 3. Branching Step
         let (left_box, right_box) = self.split_sensitive_variable(&contracted_box);
 
-        // 4. Parallelism Threshold Adjustment:
-        // Jika depth > 12 (atau batas tertentu), eksekusi sekuensial untuk hemat overhead Rayon join
+        // 4. Parallelism Threshold:
+        // If depth exceeds 12, switch to sequential execution to save Rayon join overhead
         if depth > 12 {
             let left_res = self.solve_parallel_depth(left_box, target, depth + 1);
             if let SolverResult::Sat(_) = left_res {
@@ -148,7 +147,7 @@ impl Solver {
             return self.solve_parallel_depth(right_box, target, depth + 1);
         }
 
-        // Jalankan paralel via Rayon jika depth masih dangkal
+        // 5. Parallel Execution via Rayon
         let (left_res, right_res) = rayon::join(
             || self.solve_parallel_depth(left_box, target, depth + 1),
             || self.solve_parallel_depth(right_box, target, depth + 1),
@@ -524,7 +523,7 @@ mod tests {
         let t1 = ast.add_variable("t1");
         let t2 = ast.add_variable("t2");
         let t1_plus_t2 = ast.add_binary(OpType::Add, t1, t2);
-        
+
         let cos_t1 = ast.add_unary(OpType::Cos, t1);
         let cos_t12 = ast.add_unary(OpType::Cos, t1_plus_t2);
         let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
@@ -550,7 +549,9 @@ mod tests {
         assert!(matches!(res_multi, SolverResult::Sat(_)));
         println!(
             "RW1: Robotic Arm IK [2-DOF Coordinate Reach] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
         );
     }
 
@@ -590,7 +591,9 @@ mod tests {
         assert!(matches!(res_multi, SolverResult::Sat(_)));
         println!(
             "RW2: Drone Safety Zone [4-Var Euclidean Clearance] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
         );
     }
 
@@ -601,12 +604,12 @@ mod tests {
     fn test_benchmark_realworld_circuit_equilibrium() {
         let mut ast = Ast::new();
         let v = ast.add_variable("v"); // Voltage Variable
-        
+
         let const_scale = ast.add_variable("const_scale");
         // Scale factor V / V_t (asumsi V_t = 0.026V, diprogram sebagai scaled variable)
-        let scaled_v = ast.add_binary(OpType::Mul, v, const_scale); 
+        let scaled_v = ast.add_binary(OpType::Mul, v, const_scale);
         let exp_v = ast.add_unary(OpType::Exp, scaled_v);
-        
+
         let mut initial_box = BoxRegion::new();
         initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
         initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap()); // Constant 10x multiplier
@@ -622,7 +625,9 @@ mod tests {
         assert!(matches!(res_multi, SolverResult::Sat(_)));
         println!(
             "RW3: Diode Shockley State [Non-Linear Exponential Equilibrium] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
-            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+            d1,
+            d_multi,
+            d1.as_secs_f64() / d_multi.as_secs_f64()
         );
     }
 }

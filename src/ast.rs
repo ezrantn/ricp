@@ -26,8 +26,15 @@ pub enum OpType {
 pub enum NodeKind {
     Constant(f64),
     Variable(VarId),
-    Binary { op: OpType, left: usize, right: usize },
-    Unary { op: OpType, child: usize },
+    Binary {
+        op: OpType,
+        left: usize,
+        right: usize,
+    },
+    Unary {
+        op: OpType,
+        child: usize,
+    },
 }
 
 /// Sebuah Node di AST yang menyimpan state interval sementara
@@ -238,7 +245,11 @@ impl Ast {
                         if narrowed_interval.high <= 0.0 {
                             false // Conflict! exp(x) tidak mungkin <= 0
                         } else {
-                            let valid_z = Interval::new(narrowed_interval.low.max(1e-300), narrowed_interval.high).unwrap();
+                            let valid_z = Interval::new(
+                                narrowed_interval.low.max(1e-300),
+                                narrowed_interval.high,
+                            )
+                            .unwrap();
                             let ln_z = Interval {
                                 low: Interval::round_down(valid_z.low.ln()),
                                 high: Interval::round_up(valid_z.high.ln()),
@@ -250,14 +261,18 @@ impl Ast {
                     OpType::Sin => {
                         // z = sin(x) => untuk domain lokal [-PI/2, PI/2], x = asin(z)
                         // Nilai z HARUS berada di rentang [-1, 1]
-                        if let Some(valid_z) = narrowed_interval.intersect(&Interval::new(-1.0, 1.0).unwrap()) {
+                        if let Some(valid_z) =
+                            narrowed_interval.intersect(&Interval::new(-1.0, 1.0).unwrap())
+                        {
                             let asin_z = Interval {
                                 low: Interval::round_down(valid_z.low.asin()),
                                 high: Interval::round_up(valid_z.high.asin()),
                             };
 
                             // Jika domain asal anak berada di kisaran [-PI/2, PI/2]
-                            if c_eval.low >= -std::f64::consts::FRAC_PI_2 && c_eval.high <= std::f64::consts::FRAC_PI_2 {
+                            if c_eval.low >= -std::f64::consts::FRAC_PI_2
+                                && c_eval.high <= std::f64::consts::FRAC_PI_2
+                            {
                                 self.backward_eval(child, asin_z, box_region)
                             } else {
                                 // Untuk PoC sederhana pada domain umum: abaikan narrowing jika melintasi beberapa periode
@@ -293,7 +308,6 @@ impl Ast {
 
                     _ => true,
                 }
-
             }
         }
     }
@@ -355,8 +369,14 @@ mod tests {
         // Analisa Matematika:
         // x^2 = 5 - y => Karena y ∈ [0, 2], maka x^2 ∈ [3, 5]
         // Seharusnya x yang tadinya [1, 3] menguncup/terpotong menjadi [sqrt(3), sqrt(5)] ≈ [1.73, 2.23]
-        assert!(new_x.low > 1.5, "Bound bawah x harus naik mendekati sqrt(3)");
-        assert!(new_x.high < 2.5, "Bound atas x harus turun mendekati sqrt(5)");
+        assert!(
+            new_x.low > 1.5,
+            "Bound bawah x harus naik mendekati sqrt(3)"
+        );
+        assert!(
+            new_x.high < 2.5,
+            "Bound atas x harus turun mendekati sqrt(5)"
+        );
 
         println!("Contracted x: {:?}", new_x);
         println!("Contracted y: {:?}", new_y);

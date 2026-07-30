@@ -6,3 +6,8 @@ edition = "2024"
 [dependencies]
 num_cpus = "1.17.0"
 rayon = "1.12.0"
+
+[profile.release]
+opt-level = 3
+lto = true          # Enables Link-Time Optimization across crates
+codegen-units = 1   # Reduces parallel code generation to allow better global optimization
