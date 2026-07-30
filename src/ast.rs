@@ -1,11 +1,11 @@
 use crate::interval::Interval;
-use std::collections::HashMap;
+use fxhash::FxHashMap;
 
 /// Identifier unik untuk variabel (misal "x", "y")
 pub type VarId = String;
 
 /// Pemetaan variabel ke domain intervalnya saat ini (Box Region)
-pub type BoxRegion = HashMap<VarId, Interval>;
+pub type BoxRegion = FxHashMap<VarId, Interval>;
 
 /// Jenis operasi matematika di AST node
 #[derive(Debug, Clone, PartialEq)]
@@ -328,7 +328,7 @@ mod tests {
         let x_sqr = ast.add_unary(OpType::Sqr, x);
         let root = ast.add_binary(OpType::Add, x_sqr, y);
 
-        let mut box_region = BoxRegion::new();
+        let mut box_region = BoxRegion::default();
         box_region.insert("x".to_string(), Interval::new(2.0, 3.0).unwrap());
         box_region.insert("y".to_string(), Interval::new(1.0, 5.0).unwrap());
 
@@ -350,7 +350,7 @@ mod tests {
         let x_sqr = ast.add_unary(OpType::Sqr, x);
         let root = ast.add_binary(OpType::Add, x_sqr, y);
 
-        let mut box_region = BoxRegion::new();
+        let mut box_region = BoxRegion::default();
         box_region.insert("x".to_string(), Interval::new(1.0, 3.0).unwrap());
         box_region.insert("y".to_string(), Interval::new(0.0, 2.0).unwrap());
 

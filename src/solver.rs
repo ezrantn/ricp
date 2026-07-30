@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use fxhash::FxHashMap;
 
 use crate::ast::{Ast, BoxRegion, NodeKind};
 use crate::interval::Interval;
@@ -14,12 +14,12 @@ pub struct Solver {
     pub ast: Ast,
     pub root_node: usize,
     pub delta: f64, // Target precision (e.g. 0.001)
-    pub sensitivity_map: HashMap<String, f64>,
+    pub sensitivity_map: FxHashMap<String, f64>,
 }
 
 impl Solver {
     pub fn new(ast: Ast, root_node: usize, delta: f64) -> Self {
-        let mut sensitivity_map = HashMap::default();
+        let mut sensitivity_map = FxHashMap::default();
         for node in &ast.nodes {
             if let NodeKind::Variable(ref name) = node.kind {
                 *sensitivity_map.entry(name.clone()).or_insert(0.0) += 1.0;
@@ -193,7 +193,7 @@ mod tests {
         let x_sqr = ast.add_unary(OpType::Sqr, x);
         let root = ast.add_binary(OpType::Add, x_sqr, y);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x".to_string(), Interval::new(0.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(0.0, 10.0).unwrap());
 
@@ -240,7 +240,7 @@ mod tests {
         let y_sqr = ast.add_unary(OpType::Sqr, y);
         let root = ast.add_binary(OpType::Add, x_sqr, y_sqr);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x".to_string(), Interval::new(-10.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-10.0, 10.0).unwrap());
 
@@ -293,7 +293,7 @@ mod tests {
         let exp_y = ast.add_unary(OpType::Exp, y);
         let root = ast.add_binary(OpType::Add, sin_x, exp_y);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert(
             "x".to_string(),
             Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
@@ -337,7 +337,7 @@ mod tests {
         let y_sqr = ast.add_unary(OpType::Sqr, y);
         let root = ast.add_binary(OpType::Add, x_sqr, y_sqr);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x".to_string(), Interval::new(-10.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-10.0, 10.0).unwrap());
 
@@ -387,7 +387,7 @@ mod tests {
         let y_sqr = ast.add_unary(OpType::Sqr, y);
         let root = ast.add_binary(OpType::Add, x_4, y_sqr);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
 
@@ -419,7 +419,7 @@ mod tests {
         let sin_y = ast.add_unary(OpType::Sin, y);
         let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert(
             "x".to_string(),
             Interval::new(0.0, std::f64::consts::PI).unwrap(),
@@ -457,7 +457,7 @@ mod tests {
         let y_sqr = ast.add_unary(OpType::Sqr, y);
         let root = ast.add_binary(OpType::Sub, exp_x, y_sqr);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
 
@@ -528,7 +528,7 @@ mod tests {
         let cos_t12 = ast.add_unary(OpType::Cos, t1_plus_t2);
         let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert(
             "t1".to_string(),
             Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
@@ -573,7 +573,7 @@ mod tests {
         let dy_sqr = ast.add_unary(OpType::Sqr, dy);
         let dist_sqr = ast.add_binary(OpType::Add, dx_sqr, dy_sqr);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("x1".to_string(), Interval::new(-5.0, 0.0).unwrap());
         initial_box.insert("y1".to_string(), Interval::new(-5.0, 0.0).unwrap());
         initial_box.insert("x2".to_string(), Interval::new(0.0, 5.0).unwrap());
@@ -610,7 +610,7 @@ mod tests {
         let scaled_v = ast.add_binary(OpType::Mul, v, const_scale);
         let exp_v = ast.add_unary(OpType::Exp, scaled_v);
 
-        let mut initial_box = BoxRegion::new();
+        let mut initial_box = BoxRegion::default();
         initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
         initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap()); // Constant 10x multiplier
 
