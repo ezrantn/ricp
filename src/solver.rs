@@ -1,4 +1,6 @@
-use crate::ast::{Ast, BoxRegion};
+use std::collections::HashMap;
+
+use crate::ast::{Ast, BoxRegion, NodeKind};
 use crate::interval::Interval;
 use rayon::prelude::*;
 
@@ -13,14 +15,22 @@ pub struct Solver {
     pub ast: Ast,
     pub root_node: usize,
     pub delta: f64, // Presisi target (misal 0.001)
+    pub sensitivity_map: HashMap<String, f64>,
 }
 
 impl Solver {
     pub fn new(ast: Ast, root_node: usize, delta: f64) -> Self {
+        let mut sensitivity_map = HashMap::default();
+        for node in &ast.nodes {
+            if let NodeKind::Variable(ref name) = node.kind {
+                *sensitivity_map.entry(name.clone()).or_insert(0.0) += 1.0;
+            }
+        }
         Self {
             ast,
             root_node,
             delta,
+            sensitivity_map,
         }
     }
 
@@ -29,7 +39,7 @@ impl Solver {
         let mut ast = self.ast.clone();
 
         // 1. Forward Pass
-        let eval_res = ast.forward_eval(self.root_node, &box_region)?;
+        let _eval_res = ast.forward_eval(self.root_node, &box_region)?;
 
         // 2. Backward Pass
         let is_sat = ast.backward_eval(self.root_node, target, &mut box_region);
@@ -42,8 +52,15 @@ impl Solver {
     }
 
     /// Memeriksa apakah SEMUA interval variabel di BoxRegion sudah <= delta
+    #[inline]
     pub fn is_small_enough(&self, box_region: &BoxRegion) -> bool {
         box_region.values().all(|inv| inv.width() <= self.delta)
+    }
+
+    /// Menghitung Sensitivitas Variabel berdasarkan bobot/frekuensi di AST
+    #[inline]
+    pub fn get_sensitivity(&self, var_name: &str) -> f64 {
+        *self.sensitivity_map.get(var_name).unwrap_or(&1.0)
     }
 
     /// Mencari variabel dengan interval paling lebar untuk di-branch (bisection)
@@ -71,53 +88,46 @@ impl Solver {
         (left_box, right_box)
     }
 
-    /// Menghitung Sensitivitas Variabel berdasarkan bobot/frekuensi di AST
-    pub fn get_variable_sensitivity(&self, var_name: &str) -> f64 {
-        let mut count = 0.0;
-        for node in &self.ast.nodes {
-            if let crate::ast::NodeKind::Variable(ref name) = node.kind {
-                if name == var_name {
-                    count += 1.0;
-                }
-            }
-        }
-        // Variabel yang muncul lebih sering di AST punya sensitivitas lebih tinggi
-        if count == 0.0 { 1.0 } else { count }
-    }
-
     /// Implementasi Sensitivity-Aware Variable Selection sesuai Paper!
     pub fn split_sensitive_variable(&self, box_region: &BoxRegion) -> (BoxRegion, BoxRegion) {
-        let best_var = box_region
+        let (best_var, inv) = box_region
             .iter()
             .max_by(|(k_a, inv_a), (k_b, inv_b)| {
-                let score_a = inv_a.width() * self.get_variable_sensitivity(k_a);
-                let score_b = inv_b.width() * self.get_variable_sensitivity(k_b);
+                let score_a = inv_a.width() * self.get_sensitivity(k_a);
+                let score_b = inv_b.width() * self.get_sensitivity(k_b);
                 score_a.partial_cmp(&score_b).unwrap()
             })
-            .map(|(k, _)| k.clone())
-            .expect("BoxRegion tidak boleh kosong");
+            .expect("BoxRegion cannot be empty");
 
-        let inv = box_region.get(&best_var).unwrap();
         let mid = inv.mid();
-
         let left_inv = Interval::new(inv.low, mid).unwrap();
         let right_inv = Interval::new(mid, inv.high).unwrap();
 
         let mut left_box = box_region.clone();
         let mut right_box = box_region.clone();
 
+        // Overwrite langsung di tempat
         left_box.insert(best_var.clone(), left_inv);
-        right_box.insert(best_var, right_inv);
+        right_box.insert(best_var.clone(), right_inv);
 
         (left_box, right_box)
     }
 
-    /// Core Parallel Branch-and-Prune Loop (Rayon Fork-Join)
     pub fn solve_parallel(&self, current_box: BoxRegion, target: Interval) -> SolverResult {
+        self.solve_parallel_depth(current_box, target, 0)
+    }
+
+    /// Core Parallel Branch-and-Prune Loop (Rayon Fork-Join)
+    fn solve_parallel_depth(
+        &self,
+        current_box: BoxRegion,
+        target: Interval,
+        depth: usize,
+    ) -> SolverResult {
         // 1. Contract Step
         let contracted_box = match self.contract(current_box, target) {
             Some(b) => b,
-            None => return SolverResult::Unsat, // Pruned! (UNSAT)
+            None => return SolverResult::Unsat,
         };
 
         // 2. Stopping Condition Check
@@ -128,14 +138,22 @@ impl Solver {
         // 3. Branching Step
         let (left_box, right_box) = self.split_sensitive_variable(&contracted_box);
 
-        // 4. Rayon Work-Stealing Parallelism!
-        // Kedua cabang dikirim ke thread pool Rayon secara concurrent
+        // 4. Parallelism Threshold Adjustment:
+        // Jika depth > 12 (atau batas tertentu), eksekusi sekuensial untuk hemat overhead Rayon join
+        if depth > 12 {
+            let left_res = self.solve_parallel_depth(left_box, target, depth + 1);
+            if let SolverResult::Sat(_) = left_res {
+                return left_res;
+            }
+            return self.solve_parallel_depth(right_box, target, depth + 1);
+        }
+
+        // Jalankan paralel via Rayon jika depth masih dangkal
         let (left_res, right_res) = rayon::join(
-            || self.solve_parallel(left_box, target),
-            || self.solve_parallel(right_box, target),
+            || self.solve_parallel_depth(left_box, target, depth + 1),
+            || self.solve_parallel_depth(right_box, target, depth + 1),
         );
 
-        // Kalau salah satu cabang nemu SAT, langsung return SAT!
         match (left_res, right_res) {
             (SolverResult::Sat(b), _) => SolverResult::Sat(b),
             (_, SolverResult::Sat(b)) => SolverResult::Sat(b),
