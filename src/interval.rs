@@ -142,6 +142,41 @@ impl Interval {
             high: Self::round_up(high),
         }
     }
+
+    /// Cosinus: cos([x])
+    #[inline]
+    pub fn cos(&self) -> Self {
+        use std::f64::consts::TAU;
+
+        if self.width() >= TAU {
+            return Self::new(-1.0, 1.0).unwrap();
+        }
+
+        let l_cos = self.low.cos();
+        let h_cos = self.high.cos();
+
+        let mut low = l_cos.min(h_cos);
+        let mut high = l_cos.max(h_cos);
+
+        // Cek puncak cos (2k*PI -> cos = 1.0)
+        let k_high = (self.high / TAU).floor();
+        let peak = k_high * TAU;
+        if self.low <= peak && peak <= self.high {
+            high = 1.0;
+        }
+
+        // Cek lembah cos (PI + 2k*PI -> cos = -1.0)
+        let k_low = ((self.high - std::f64::consts::PI) / TAU).floor();
+        let trough = std::f64::consts::PI + k_low * TAU;
+        if self.low <= trough && trough <= self.high {
+            low = -1.0;
+        }
+
+        Self {
+            low: Self::round_down(low),
+            high: Self::round_up(high),
+        }
+    }
 }
 
 impl Add for Interval {

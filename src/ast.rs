@@ -18,6 +18,7 @@ pub enum OpType {
     Sqrt,
     Sin,
     Exp,
+    Cos,
 }
 
 /// Jenis Node di dalam AST
@@ -108,7 +109,7 @@ impl Ast {
                     OpType::Add => Some(l_int + r_int),
                     OpType::Sub => Some(l_int - r_int),
                     OpType::Mul => Some(l_int * r_int),
-                    OpType::Div => (l_int / r_int),
+                    OpType::Div => l_int / r_int,
                     _ => None,
                 }
             }
@@ -120,6 +121,7 @@ impl Ast {
                     OpType::Sqr => Some(c_int.sqr()),
                     OpType::Sqrt => c_int.sqrt(),
                     OpType::Sin => Some(c_int.sin()),
+                    OpType::Cos => Some(c_int.cos()),
                     OpType::Exp => Some(c_int.exp()),
                     _ => None,
                 }
@@ -263,6 +265,29 @@ impl Ast {
                             }
                         } else {
                             false // Conflict! sin(x) di luar [-1, 1]
+                        }
+                    }
+
+                    OpType::Cos => {
+                        // z = cos(x) => untuk domain lokal [0, PI], x = acos(z)
+                        // Nilai z HARUS berada di rentang [-1, 1]
+                        if let Some(valid_z) =
+                            narrowed_interval.intersect(&Interval::new(-1.0, 1.0).unwrap())
+                        {
+                            // acos bersifat monotonically decreasing: high z -> low x
+                            let acos_z = Interval {
+                                low: Interval::round_down(valid_z.high.acos()),
+                                high: Interval::round_up(valid_z.low.acos()),
+                            };
+
+                            // Jika domain asal anak berada di kisaran [0, PI]
+                            if c_eval.low >= 0.0 && c_eval.high <= std::f64::consts::PI {
+                                self.backward_eval(child, acos_z, box_region)
+                            } else {
+                                true
+                            }
+                        } else {
+                            false // Conflict! cos(x) di luar [-1, 1]
                         }
                     }
 

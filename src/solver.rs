@@ -511,4 +511,118 @@ mod tests {
 
         assert_eq!(node_count, 5);
     }
+
+    /// Real-World Problem 1: 2-DOF Robotic Arm Inverse Kinematics
+    /// Menentukan sudut sendi robot (theta1, theta2) agar ujung arm mencapai target koordinat (X, Y).
+    /// Persamaan: x_target = L1*cos(t1) + L2*cos(t1 + t2), y_target = L1*sin(t1) + L2*sin(t1 + t2)
+    #[test]
+    fn test_benchmark_realworld_robotic_arm_ik() {
+        // Target End-Effector: X = 1.5, Y = 1.0 (L1 = 1.0, L2 = 1.0)
+        // Constraint: cos(t1) + cos(t1 + t2) - 1.5 = 0
+        // Domain t1, t2 ∈ [0, PI/2] (Sudut kuadran pertama)
+        let mut ast = Ast::new();
+        let t1 = ast.add_variable("t1");
+        let t2 = ast.add_variable("t2");
+        let t1_plus_t2 = ast.add_binary(OpType::Add, t1, t2);
+        
+        let cos_t1 = ast.add_unary(OpType::Cos, t1);
+        let cos_t12 = ast.add_unary(OpType::Cos, t1_plus_t2);
+        let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert(
+            "t1".to_string(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+        );
+        initial_box.insert(
+            "t2".to_string(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+        );
+
+        let solver = Solver::new(ast, x_pos, 0.0001);
+        let target = Interval::point(1.5).unwrap();
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!(
+            "RW1: Robotic Arm IK [2-DOF Coordinate Reach] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
+    }
+
+    /// Real-World Problem 2: Autonomous Drone Collision Boundary Verification
+    /// Memastikan jarak Euclidean antara dua drone (D1 dan D2) tidak melanggar safety zone (R >= 2.0).
+    /// Distance = sqrt((x2 - x1)^2 + (y2 - y1)^2) over 4 Variables!
+    #[test]
+    fn test_benchmark_realworld_drone_collision_avoidance() {
+        // 4 Variabel: x1, y1 (Drone 1), x2, y2 (Drone 2)
+        let mut ast = Ast::new();
+        let x1 = ast.add_variable("x1");
+        let y1 = ast.add_variable("y1");
+        let x2 = ast.add_variable("x2");
+        let y2 = ast.add_variable("y2");
+
+        let dx = ast.add_binary(OpType::Sub, x2, x1);
+        let dy = ast.add_binary(OpType::Sub, y2, y1);
+        let dx_sqr = ast.add_unary(OpType::Sqr, dx);
+        let dy_sqr = ast.add_unary(OpType::Sqr, dy);
+        let dist_sqr = ast.add_binary(OpType::Add, dx_sqr, dy_sqr);
+
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("x1".to_string(), Interval::new(-5.0, 0.0).unwrap());
+        initial_box.insert("y1".to_string(), Interval::new(-5.0, 0.0).unwrap());
+        initial_box.insert("x2".to_string(), Interval::new(0.0, 5.0).unwrap());
+        initial_box.insert("y2".to_string(), Interval::new(0.0, 5.0).unwrap());
+
+        // Cek apakah ada trajectory di mana dist_sqr = 4.0 (Distance = 2.0 meter)
+        let solver = Solver::new(ast, dist_sqr, 0.0005);
+        let target = Interval::point(4.0).unwrap();
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!(
+            "RW2: Drone Safety Zone [4-Var Euclidean Clearance] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
+    }
+
+    /// Real-World Problem 3: Non-Linear Diode Circuit Equilibrium State
+    /// Persamaan Transistor/Diode Shockley: I = I_s * (exp(V / V_t) - 1)
+    /// Solver mencari tegangan kerja V saat arus I berada pada kondisi ambang batas.
+    #[test]
+    fn test_benchmark_realworld_circuit_equilibrium() {
+        let mut ast = Ast::new();
+        let v = ast.add_variable("v"); // Voltage Variable
+        
+        let const_scale = ast.add_variable("const_scale");
+        // Scale factor V / V_t (asumsi V_t = 0.026V, diprogram sebagai scaled variable)
+        let scaled_v = ast.add_binary(OpType::Mul, v, const_scale); 
+        let exp_v = ast.add_unary(OpType::Exp, scaled_v);
+        
+        let mut initial_box = BoxRegion::new();
+        initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
+        initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap()); // Constant 10x multiplier
+
+        let solver = Solver::new(ast, exp_v, 0.0001);
+        let target = Interval::new(50.0, 100.0).unwrap(); // Target Current Range
+
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
+            solver.solve_parallel(initial_box, target)
+        });
+
+        assert!(matches!(res_multi, SolverResult::Sat(_)));
+        println!(
+            "RW3: Diode Shockley State [Non-Linear Exponential Equilibrium] -> 1-Thread: {:?} | Multi: {:?} ({:.2}x speedup)",
+            d1, d_multi, d1.as_secs_f64() / d_multi.as_secs_f64()
+        );
+    }
 }
