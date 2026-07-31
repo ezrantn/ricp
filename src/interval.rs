@@ -63,8 +63,6 @@ impl Interval {
         val.next_up()
     }
 
-    // --- OPERASI KHUSUS NON-LINEAR (Phase 1+) ---
-
     /// Operasi Kuadrat: [x]^2
     #[inline]
     pub fn sqr(&self) -> Self {

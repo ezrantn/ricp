@@ -191,27 +191,28 @@ impl Ast {
                         // z = x + y  =>  x = z - y,  y = z - x
                         let new_l_target = narrowed_interval - r_eval;
                         let new_r_target = narrowed_interval - l_eval;
-
-                        self.backward_eval(left, new_l_target, box_region)
-                            && self.backward_eval(right, new_r_target, box_region)
+                        let ok_l = self.backward_eval(left, new_l_target, box_region);
+                        let ok_r = self.backward_eval(right, new_r_target, box_region);
+                        ok_l && ok_r
                     }
-
                     OpType::Sub => {
                         // z = x - y  =>  x = z + y,  y = x - z
                         let new_l_target = narrowed_interval + r_eval;
                         let new_r_target = l_eval - narrowed_interval;
 
-                        self.backward_eval(left, new_l_target, box_region)
-                            && self.backward_eval(right, new_r_target, box_region)
+                        let res_left = self.backward_eval(left, new_l_target, box_region);
+                        let res_right = self.backward_eval(right, new_r_target, box_region);
+
+                        res_left && res_right
                     }
 
                     OpType::Mul => {
                         // z = x * y  =>  x = z / y,  y = z / x
                         let new_l_target = (narrowed_interval / r_eval).unwrap_or(l_eval);
                         let new_r_target = (narrowed_interval / l_eval).unwrap_or(r_eval);
-
-                        self.backward_eval(left, new_l_target, box_region)
-                            && self.backward_eval(right, new_r_target, box_region)
+                        let ok_l = self.backward_eval(left, new_l_target, box_region);
+                        let ok_r = self.backward_eval(right, new_r_target, box_region);
+                        ok_l && ok_r
                     }
 
                     _ => true, // Operasi lain bisa ditambahkan nanti
