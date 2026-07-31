@@ -1,6 +1,6 @@
 use fxhash::FxHashMap;
 
-use crate::ast::{Ast, BoxRegion, NodeKind};
+use crate::ast::{Ast, BoxRegion, NodeKind, OpType};
 use crate::interval::Interval;
 
 /// Result from SMT Solver Engine
@@ -21,10 +21,27 @@ impl Solver {
     pub fn new(ast: Ast, root_node: usize, delta: f64) -> Self {
         let mut sensitivity_map = FxHashMap::default();
         for node in &ast.nodes {
-            if let NodeKind::Variable(ref name) = node.kind {
-                *sensitivity_map.entry(name.clone()).or_insert(0.0) += 1.0;
+            match &node.kind {
+                // Jika node adalah Unary Operator (seperti Exp, Sqr, Sin, dll)
+                NodeKind::Unary { op, child } => {
+                    if let NodeKind::Variable(ref name) = ast.nodes[*child].kind {
+                        let weight = match op {
+                            OpType::Exp => 10.0,              // Non-linear amplification tinggi!
+                            OpType::Sqr => 3.0,               // Amplifikasi kuadratik
+                            OpType::Sin | OpType::Cos => 2.0, // Osilatif
+                            _ => 1.0,
+                        };
+                        *sensitivity_map.entry(name.clone()).or_insert(0.0) += weight;
+                    }
+                }
+                // Jika node adalah Variable biasa (tanpa operator khusus di atasnya)
+                NodeKind::Variable(name) => {
+                    *sensitivity_map.entry(name.clone()).or_insert(0.0) += 1.0;
+                }
+                _ => {}
             }
         }
+
         Self {
             ast,
             root_node,
