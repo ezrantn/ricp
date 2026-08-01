@@ -8,6 +8,13 @@ fxhash = "0.2.1"
 num_cpus = "1.17.0"
 rayon = "1.12.0"
 
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "solver_benchmarks"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true          # Enables Link-Time Optimization across crates

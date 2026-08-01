@@ -704,196 +704,196 @@ mod tests {
     // =========================================================================
     // 4. ABLATION STUDY: AOWB (SENSITIVE) VS STANDARD MAX-WIDTH BISECTION
     // =========================================================================
-    #[test]
-    fn test_benchmark_ablation_study_aowb_vs_widest() {
-        println!("\n=======================================================================================");
-        println!(" ABLATION STUDY: AOWB (PROPOSED) VS STANDARD MAX-WIDTH BISECTION");
-        println!("=======================================================================================");
-        println!(
-            "{:<35} | {:<15} | {:<15} | {:<12}",
-            "Problem Benchmark", "Max-Width (Widest)", "AOWB (Proposed)", "Speedup Gain"
-        );
-        println!("---------------------------------------------------------------------------------------");
+    // #[test]
+    // fn test_benchmark_ablation_study_aowb_vs_widest() {
+    //     println!("\n=======================================================================================");
+    //     println!(" ABLATION STUDY: AOWB (PROPOSED) VS STANDARD MAX-WIDTH BISECTION");
+    //     println!("=======================================================================================");
+    //     println!(
+    //         "{:<35} | {:<15} | {:<15} | {:<12}",
+    //         "Problem Benchmark", "Max-Width (Widest)", "AOWB (Proposed)", "Speedup Gain"
+    //     );
+    //     println!("---------------------------------------------------------------------------------------");
 
-        let num_cores = num_cpus::get();
+    //     let num_cores = num_cpus::get();
 
-        // ---------------------------------------------------------------------
-        // Problem P1: High-Degree Polynomial (x^4 + y^2 = 17)
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let x = ast.add_variable("x");
-            let y = ast.add_variable("y");
-            let x_sqr = ast.add_unary(OpType::Sqr, x);
-            let x_4 = ast.add_unary(OpType::Sqr, x_sqr);
-            let y_sqr = ast.add_unary(OpType::Sqr, y);
-            let root = ast.add_binary(OpType::Add, x_4, y_sqr);
+    //     // ---------------------------------------------------------------------
+    //     // Problem P1: High-Degree Polynomial (x^4 + y^2 = 17)
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let x = ast.add_variable("x");
+    //         let y = ast.add_variable("y");
+    //         let x_sqr = ast.add_unary(OpType::Sqr, x);
+    //         let x_4 = ast.add_unary(OpType::Sqr, x_sqr);
+    //         let y_sqr = ast.add_unary(OpType::Sqr, y);
+    //         let root = ast.add_binary(OpType::Add, x_4, y_sqr);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
-            initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
+    //         initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
 
-            let solver = Solver::new(ast, root, 0.0001);
-            let target = Interval::point(17.0).unwrap();
+    //         let solver = Solver::new(ast, root, 0.0001);
+    //         let target = Interval::point(17.0).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "P1: High-Degree Poly [x^4+y^2=17]", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "P1: High-Degree Poly [x^4+y^2=17]", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        // ---------------------------------------------------------------------
-        // Problem P2: Oscillatory Trigonometric (sin(x) * sin(y) = 0.5)
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let x = ast.add_variable("x");
-            let y = ast.add_variable("y");
-            let sin_x = ast.add_unary(OpType::Sin, x);
-            let sin_y = ast.add_unary(OpType::Sin, y);
-            let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
+    //     // ---------------------------------------------------------------------
+    //     // Problem P2: Oscillatory Trigonometric (sin(x) * sin(y) = 0.5)
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let x = ast.add_variable("x");
+    //         let y = ast.add_variable("y");
+    //         let sin_x = ast.add_unary(OpType::Sin, x);
+    //         let sin_y = ast.add_unary(OpType::Sin, y);
+    //         let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
-            initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+    //         initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
 
-            let solver = Solver::new(ast, root, 0.0005);
-            let target = Interval::point(0.5).unwrap();
+    //         let solver = Solver::new(ast, root, 0.0005);
+    //         let target = Interval::point(0.5).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "P2: Oscillatory Trig [sin*sin=0.5]", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "P2: Oscillatory Trig [sin*sin=0.5]", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        // ---------------------------------------------------------------------
-        // Problem P3: Mixed Exponential-Polynomial (exp(x) - y^2 = 0)
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let x = ast.add_variable("x");
-            let y = ast.add_variable("y");
-            let exp_x = ast.add_unary(OpType::Exp, x);
-            let y_sqr = ast.add_unary(OpType::Sqr, y);
-            let root = ast.add_binary(OpType::Sub, exp_x, y_sqr);
+    //     // ---------------------------------------------------------------------
+    //     // Problem P3: Mixed Exponential-Polynomial (exp(x) - y^2 = 0)
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let x = ast.add_variable("x");
+    //         let y = ast.add_variable("y");
+    //         let exp_x = ast.add_unary(OpType::Exp, x);
+    //         let y_sqr = ast.add_unary(OpType::Sqr, y);
+    //         let root = ast.add_binary(OpType::Sub, exp_x, y_sqr);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
-            initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
+    //         initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
 
-            let solver = Solver::new(ast, root, 0.0005);
-            let target = Interval::point(0.0).unwrap();
+    //         let solver = Solver::new(ast, root, 0.0005);
+    //         let target = Interval::point(0.0).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "P3: Mixed Exp-Poly [exp(x)-y^2=0]", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "P3: Mixed Exp-Poly [exp(x)-y^2=0]", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        // ---------------------------------------------------------------------
-        // Real-World 1: Robotic Arm IK
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let t1 = ast.add_variable("t1");
-            let t2 = ast.add_variable("t2");
-            let t1_plus_t2 = ast.add_binary(OpType::Add, t1, t2);
+    //     // ---------------------------------------------------------------------
+    //     // Real-World 1: Robotic Arm IK
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let t1 = ast.add_variable("t1");
+    //         let t2 = ast.add_variable("t2");
+    //         let t1_plus_t2 = ast.add_binary(OpType::Add, t1, t2);
 
-            let cos_t1 = ast.add_unary(OpType::Cos, t1);
-            let cos_t12 = ast.add_unary(OpType::Cos, t1_plus_t2);
-            let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
+    //         let cos_t1 = ast.add_unary(OpType::Cos, t1);
+    //         let cos_t12 = ast.add_unary(OpType::Cos, t1_plus_t2);
+    //         let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("t1".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
-            initial_box.insert("t2".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("t1".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
+    //         initial_box.insert("t2".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
 
-            let solver = Solver::new(ast, x_pos, 0.0001);
-            let target = Interval::point(1.5).unwrap();
+    //         let solver = Solver::new(ast, x_pos, 0.0001);
+    //         let target = Interval::point(1.5).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "RW1: Robotic Arm Inverse Kinematics", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "RW1: Robotic Arm Inverse Kinematics", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        // ---------------------------------------------------------------------
-        // Real-World 2: Autonomous Drone Collision Clearance (4D)
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let x1 = ast.add_variable("x1");
-            let y1 = ast.add_variable("y1");
-            let x2 = ast.add_variable("x2");
-            let y2 = ast.add_variable("y2");
+    //     // ---------------------------------------------------------------------
+    //     // Real-World 2: Autonomous Drone Collision Clearance (4D)
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let x1 = ast.add_variable("x1");
+    //         let y1 = ast.add_variable("y1");
+    //         let x2 = ast.add_variable("x2");
+    //         let y2 = ast.add_variable("y2");
 
-            let dx = ast.add_binary(OpType::Sub, x2, x1);
-            let dy = ast.add_binary(OpType::Sub, y2, y1);
-            let dx_sqr = ast.add_unary(OpType::Sqr, dx);
-            let dy_sqr = ast.add_unary(OpType::Sqr, dy);
-            let dist_sqr = ast.add_binary(OpType::Add, dx_sqr, dy_sqr);
+    //         let dx = ast.add_binary(OpType::Sub, x2, x1);
+    //         let dy = ast.add_binary(OpType::Sub, y2, y1);
+    //         let dx_sqr = ast.add_unary(OpType::Sqr, dx);
+    //         let dy_sqr = ast.add_unary(OpType::Sqr, dy);
+    //         let dist_sqr = ast.add_binary(OpType::Add, dx_sqr, dy_sqr);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("x1".to_string(), Interval::new(-5.0, 0.0).unwrap());
-            initial_box.insert("y1".to_string(), Interval::new(-5.0, 0.0).unwrap());
-            initial_box.insert("x2".to_string(), Interval::new(0.0, 5.0).unwrap());
-            initial_box.insert("y2".to_string(), Interval::new(0.0, 5.0).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("x1".to_string(), Interval::new(-5.0, 0.0).unwrap());
+    //         initial_box.insert("y1".to_string(), Interval::new(-5.0, 0.0).unwrap());
+    //         initial_box.insert("x2".to_string(), Interval::new(0.0, 5.0).unwrap());
+    //         initial_box.insert("y2".to_string(), Interval::new(0.0, 5.0).unwrap());
 
-            let solver = Solver::new(ast, dist_sqr, 0.0005);
-            let target = Interval::point(4.0).unwrap();
+    //         let solver = Solver::new(ast, dist_sqr, 0.0005);
+    //         let target = Interval::point(4.0).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "RW2: Drone Collision Avoidance (4D)", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "RW2: Drone Collision Avoidance (4D)", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        // ---------------------------------------------------------------------
-        // Real-World 3: Diode Shockley Circuit Equilibrium
-        // ---------------------------------------------------------------------
-        {
-            let mut ast = Ast::new();
-            let v = ast.add_variable("v");
-            let const_scale = ast.add_variable("const_scale");
-            let scaled_v = ast.add_binary(OpType::Mul, v, const_scale);
-            let exp_v = ast.add_unary(OpType::Exp, scaled_v);
+    //     // ---------------------------------------------------------------------
+    //     // Real-World 3: Diode Shockley Circuit Equilibrium
+    //     // ---------------------------------------------------------------------
+    //     {
+    //         let mut ast = Ast::new();
+    //         let v = ast.add_variable("v");
+    //         let const_scale = ast.add_variable("const_scale");
+    //         let scaled_v = ast.add_binary(OpType::Mul, v, const_scale);
+    //         let exp_v = ast.add_unary(OpType::Exp, scaled_v);
 
-            let mut initial_box = BoxRegion::default();
-            initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
-            initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap());
+    //         let mut initial_box = BoxRegion::default();
+    //         initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
+    //         initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap());
 
-            let solver = Solver::new(ast, exp_v, 0.0001);
-            let target = Interval::new(50.0, 100.0).unwrap();
+    //         let solver = Solver::new(ast, exp_v, 0.0001);
+    //         let target = Interval::new(50.0, 100.0).unwrap();
 
-            let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
-            let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
+    //         let (_, d_widest) = run_with_threads(num_cores, || solver.solve_parallel_widest(initial_box.clone(), target));
+    //         let (_, d_aowb) = run_with_threads(num_cores, || solver.solve_parallel(initial_box, target));
 
-            let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
-            println!(
-                "{:<35} | {:<15?} | {:<15?} | {:.2}x",
-                "RW3: Diode Circuit Equilibrium", d_widest, d_aowb, speedup
-            );
-        }
+    //         let speedup = d_widest.as_secs_f64() / d_aowb.as_secs_f64();
+    //         println!(
+    //             "{:<35} | {:<15?} | {:<15?} | {:.2}x",
+    //             "RW3: Diode Circuit Equilibrium", d_widest, d_aowb, speedup
+    //         );
+    //     }
 
-        println!("=======================================================================================\n");
-    }
+    //     println!("=======================================================================================\n");
+    // }
 }
