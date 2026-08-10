@@ -7,6 +7,8 @@ pub type VarId = String;
 /// Pemetaan variabel ke domain intervalnya saat ini (Box Region)
 pub type BoxRegion = FxHashMap<VarId, Interval>;
 
+pub type NodeId = usize;
+
 /// Jenis operasi matematika di AST node
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpType {
@@ -28,12 +30,12 @@ pub enum NodeKind {
     Variable(VarId),
     Binary {
         op: OpType,
-        left: usize,
-        right: usize,
+        left: NodeId,
+        right: NodeId,
     },
     Unary {
         op: OpType,
-        child: usize,
+        child: NodeId,
     },
 }
 
