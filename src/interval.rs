@@ -1,4 +1,4 @@
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{ Add, Div, Mul, Sub };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interval {
@@ -10,11 +10,7 @@ impl Interval {
     /// Membuat interval baru [low, high].
     /// Mengembalikan None jika low > high atau ada nilainya yang NaN.
     pub fn new(low: f64, high: f64) -> Option<Self> {
-        if low.is_nan() || high.is_nan() || low > high {
-            None
-        } else {
-            Some(Self { low, high })
-        }
+        if low.is_nan() || high.is_nan() || low > high { None } else { Some(Self { low, high }) }
     }
 
     /// Point interval [v, v]
@@ -49,7 +45,14 @@ impl Interval {
         Self::new(new_low, new_high)
     }
 
-    // --- DIRECTED ROUNDING HELPERS ---
+    /// Batas aman ULP untuk fungsi TRANSCENDENTAL (exp, sin, cos, ln, asin, acos).
+    /// IEEE-754 TIDAK mewajibkan fungsi-fungsi ini correctly-rounded (beda dengan
+    /// +, -, *, /, sqrt yang wajib <=0.5 ulp). libm (glibc/musl/MSVC CRT) pada
+    /// praktiknya biasanya akurat <=1 ulp, tapi itu bukan garansi lintas-platform.
+    /// Margin 4 ulp ini adalah bound rekayasa (bukan bukti formal) untuk
+    /// mengkompensasi variasi implementasi libm tsb, dijaga tetap murah karena
+    /// murni operasi bit native f64 (tanpa dependency arbitrary-precision).
+    const TRANSCENDENTAL_ULP_MARGIN: u32 = 4;
 
     /// Mengarahkan rounding ke bawah (-infinity)
     #[inline]
@@ -61,6 +64,28 @@ impl Interval {
     #[inline]
     pub fn round_up(val: f64) -> f64 {
         val.next_up()
+    }
+
+    /// Rounding ke bawah + safety margin ULP, khusus hasil fungsi transcendental.
+    #[inline]
+    pub fn round_down_transcendental(val: f64) -> f64 {
+        let mut v = val;
+        for _ in 0..Self::TRANSCENDENTAL_ULP_MARGIN {
+            v = v.next_down();
+        }
+
+        v
+    }
+
+    /// Rounding ke atas + safety margin ULP, khusus hasil fungsi transcendental.
+    #[inline]
+    pub fn round_up_transcendental(val: f64) -> f64 {
+        let mut v = val;
+        for _ in 0..Self::TRANSCENDENTAL_ULP_MARGIN {
+            v = v.next_up();
+        }
+
+        v
     }
 
     /// Operasi Kuadrat: [x]^2
@@ -88,11 +113,7 @@ impl Interval {
         if self.high < 0.0 {
             None // Tidak ada domain riil
         } else {
-            let low = if self.low <= 0.0 {
-                0.0
-            } else {
-                Self::round_down(self.low.sqrt())
-            };
+            let low = if self.low <= 0.0 { 0.0 } else { Self::round_down(self.low.sqrt()) };
             let high = Self::round_up(self.high.sqrt());
             Self::new(low, high)
         }
@@ -101,8 +122,8 @@ impl Interval {
     /// Eksponensial: exp([x])
     pub fn exp(&self) -> Self {
         Self {
-            low: Self::round_down(self.low.exp()),
-            high: Self::round_up(self.high.exp()),
+            low: Self::round_down_transcendental(self.low.exp()),
+            high: Self::round_up_transcendental(self.high.exp()),
         }
     }
 
@@ -136,8 +157,8 @@ impl Interval {
         }
 
         Self {
-            low: Self::round_down(low),
-            high: Self::round_up(high),
+            low: Self::round_down_transcendental(low),
+            high: Self::round_up_transcendental(high),
         }
     }
 
@@ -171,8 +192,8 @@ impl Interval {
         }
 
         Self {
-            low: Self::round_down(low),
-            high: Self::round_up(high),
+            low: Self::round_down_transcendental(low),
+            high: Self::round_up_transcendental(high),
         }
     }
 }
@@ -309,6 +330,43 @@ mod tests {
         assert!(c.high >= 6.0);
     }
 
+    // exp/sin/cos are NOT IEEE-754 required-correctly-rounded (unlike sqrt),
+    // so their outward rounding needs a wider safety margin than a single ULP
+    // to stay sound across libm implementations.
+    #[test]
+    fn test_transcendental_margin_wider_than_single_ulp() {
+        let raw = 1.0_f64;
+
+        let single_ulp_down = Interval::round_down(raw);
+        let single_ulp_up = Interval::round_up(raw);
+
+        let margin_down = Interval::round_down_transcendental(raw);
+        let margin_up = Interval::round_up_transcendental(raw);
+
+        // Margin harus mengucup lebih lebar (atau sama) dibanding 1-ulp biasa,
+        // supaya bisa menyerap potensi error libm > 0.5 ulp pada exp/sin/cos.
+        assert!(margin_down < single_ulp_down);
+        assert!(margin_up > single_ulp_up);
+
+        // Tapi tetap membungkus nilai mentahnya (soundness dasar tetap terjaga)
+        assert!(margin_down <= raw);
+        assert!(margin_up >= raw);
+    }
+
+    #[test]
+    fn test_exp_result_uses_transcendental_margin() {
+        // exp([1, 1]) harus punya lebar > 0 (margin membuat titik jadi interval sempit,
+        // bukan titik tunggal seperti pembulatan 1-ulp biasa akan hasilkan)
+        let a = Interval::point(1.0).unwrap();
+        let res = a.exp();
+
+        assert!(res.low <= std::f64::consts::E);
+        assert!(res.high >= std::f64::consts::E);
+        // Lebar interval harus lebih besar dari sekadar 2 ulp (1 ulp di tiap sisi),
+        // membuktikan margin transcendental benar-benar dipakai.
+        assert!(res.width() > 2.0 * f64::EPSILON * std::f64::consts::E);
+    }
+
     #[test]
     fn test_intersection() {
         let a = Interval::new(1.0, 5.0).unwrap();
@@ -349,14 +407,8 @@ mod tests {
         let raw_sum_high = a.high + b.high;
 
         // Direct rounding HARUS memperlebar batas dari kalkulasi mentah f64
-        assert!(
-            c.low < raw_sum_low,
-            "low bound harus ditarik ke bawah oleh next_down()"
-        );
-        assert!(
-            c.high > raw_sum_high,
-            "high bound harus ditarik ke atas oleh next_up()"
-        );
+        assert!(c.low < raw_sum_low, "low bound harus ditarik ke bawah oleh next_down()");
+        assert!(c.high > raw_sum_high, "high bound harus ditarik ke atas oleh next_up()");
 
         // 2. c.low dijamin <= 0.3 f64 literal
         assert!(c.low <= 0.3);
