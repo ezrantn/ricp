@@ -1,6 +1,6 @@
 use fxhash::FxHashMap;
 
-use crate::ast::{Ast, BoxRegion, NodeKind, OpType};
+use crate::ast::{ Ast, BoxRegion, NodeId, NodeKind, OpType };
 use crate::interval::Interval;
 
 /// Result from SMT Solver Engine
@@ -10,24 +10,39 @@ pub enum SolverResult {
     Unsat,
 }
 
+/// A single constraint: 'root' node of the AST must evaluate into 'target'.
+#[derive(Debug, Clone)]
+pub struct Constraint {
+    pub root: NodeId,
+    pub target: Interval,
+}
+
+impl Constraint {
+    pub fn new(root: NodeId, target: Interval) -> Self {
+        Self { root, target }
+    }
+}
+
 pub struct Solver {
     pub ast: Ast,
-    pub root_node: usize,
+    pub constraints: Vec<Constraint>,
     pub delta: f64, // Target precision (e.g. 0.001)
     pub sensitivity_map: FxHashMap<String, f64>,
+    pub max_propagation_rounds: usize, // Safety cap on HC4 fixpoint rounds inside a single contract() call
 }
 
 impl Solver {
-    pub fn new(ast: Ast, root_node: usize, delta: f64) -> Self {
+    pub fn new(ast: Ast, constraints: Vec<Constraint>, delta: f64) -> Self {
         let mut sensitivity_map = FxHashMap::default();
+        assert!(!constraints.is_empty(), "Solver requires at least one constraint.");
         for node in &ast.nodes {
             match &node.kind {
                 // Jika node adalah Unary Operator (seperti Exp, Sqr, Sin, dll)
                 NodeKind::Unary { op, child } => {
                     if let NodeKind::Variable(ref name) = ast.nodes[*child].kind {
                         let weight = match op {
-                            OpType::Exp => 10.0,              // Non-linear amplification tinggi!
-                            OpType::Sqr => 3.0,               // Amplifikasi kuadratik
+                            OpType::Exp => 10.0, // Non-linear amplification tinggi!
+                            OpType::Sqr => 3.0, // Amplifikasi kuadratik
                             OpType::Sin | OpType::Cos => 2.0, // Osilatif
                             _ => 1.0,
                         };
@@ -44,27 +59,63 @@ impl Solver {
 
         Self {
             ast,
-            root_node,
+            constraints,
             delta,
             sensitivity_map,
+            max_propagation_rounds: 50,
         }
     }
 
-    /// Run a single contraction cycle (Forward + Backward)
-    pub fn contract(&self, mut box_region: BoxRegion, target: Interval) -> Option<BoxRegion> {
-        let mut ast = self.ast.clone();
+    /// Convenience constructor for the single-equation case.
+    pub fn new_single(ast: Ast, root_node: usize, target: Interval, delta: f64) -> Self {
+        Self::new(ast, vec![Constraint::new(root_node, target)], delta)
+    }
 
-        // 1. Forward Pass
-        let _eval_res = ast.forward_eval(self.root_node, &box_region)?;
+    #[inline]
+    fn total_width(box_region: &BoxRegion) -> f64 {
+        box_region
+            .values()
+            .map(|iv| iv.width())
+            .sum()
+    }
 
-        // 2. Backward Pass
-        let is_sat = ast.backward_eval(self.root_node, target, &mut box_region);
-
-        if is_sat {
-            Some(box_region)
-        } else {
-            None // Conflict / UNSAT
+    fn contract_one(
+        &self,
+        ast: &mut Ast,
+        constraint: &Constraint,
+        box_region: &mut BoxRegion
+    ) -> bool {
+        // 1. Forward Pass. Missing domain (unbound var) is treated as "no info yet" -> skip.
+        if ast.forward_eval(constraint.root, box_region).is_none() {
+            return true;
         }
+        ast.backward_eval(constraint.root, constraint.target, box_region)
+    }
+
+    /// Propagate ALL constraints to a shared fixpoint (AC3-style outer loop).
+    /// Since constraints can share variables, narrowing from one constraint can
+    /// unlock further narrowing in another - we keep sweeping until the total
+    /// box width stops shrinking (or we hit the round cap as a safety valve).
+    pub fn contract(&self, mut box_region: BoxRegion) -> Option<BoxRegion> {
+        let mut ast = self.ast.clone();
+        let mut prev_width = f64::INFINITY;
+
+        for _ in 0..self.max_propagation_rounds {
+            for constraint in &self.constraints {
+                if !self.contract_one(&mut ast, constraint, &mut box_region) {
+                    return None; // Conflict / UNSAT on this constraint
+                }
+            }
+
+            let width = Self::total_width(&box_region);
+            if prev_width - width < 1e-12 {
+                break; // Fixpoint reached (or negligible progress left)
+            }
+
+            prev_width = width;
+        }
+
+        Some(box_region)
     }
 
     /// Check if all variable intervals are small enough (width <= delta)
@@ -134,21 +185,18 @@ impl Solver {
         (left_box, right_box)
     }
 
-    pub fn solve_parallel(&self, current_box: BoxRegion, target: Interval) -> SolverResult {
-        self.solve_parallel_depth(current_box, target, 0)
+    pub fn solve_parallel(&self, current_box: BoxRegion) -> SolverResult {
+        self.solve_parallel_depth(current_box, 0)
     }
 
     /// Core Parallel Branch-and-Prune Loop (Rayon Fork-Join)
-    fn solve_parallel_depth(
-        &self,
-        current_box: BoxRegion,
-        target: Interval,
-        depth: usize,
-    ) -> SolverResult {
-        // 1. Contract Step
-        let contracted_box = match self.contract(current_box, target) {
+    fn solve_parallel_depth(&self, current_box: BoxRegion, depth: usize) -> SolverResult {
+        // 1. Contract Step (sweeps ALL constraints to a shared fixpoint)
+        let contracted_box = match self.contract(current_box) {
             Some(b) => b,
-            None => return SolverResult::Unsat,
+            None => {
+                return SolverResult::Unsat;
+            }
         };
 
         // 2. Stopping Condition Check
@@ -162,17 +210,17 @@ impl Solver {
         // 4. Parallelism Threshold:
         // If depth exceeds 12, switch to sequential execution to save Rayon join overhead
         if depth > 12 {
-            let left_res = self.solve_parallel_depth(left_box, target, depth + 1);
+            let left_res = self.solve_parallel_depth(left_box, depth + 1);
             if let SolverResult::Sat(_) = left_res {
                 return left_res;
             }
-            return self.solve_parallel_depth(right_box, target, depth + 1);
+            return self.solve_parallel_depth(right_box, depth + 1);
         }
 
         // 5. Parallel Execution via Rayon
         let (left_res, right_res) = rayon::join(
-            || self.solve_parallel_depth(left_box, target, depth + 1),
-            || self.solve_parallel_depth(right_box, target, depth + 1),
+            || self.solve_parallel_depth(left_box, depth + 1),
+            || self.solve_parallel_depth(right_box, depth + 1)
         );
 
         match (left_res, right_res) {
@@ -182,21 +230,18 @@ impl Solver {
         }
     }
 
-    pub fn solve_parallel_widest(&self, current_box: BoxRegion, target: Interval) -> SolverResult {
-        self.solve_parallel_depth_widest(current_box, target, 0)
+    pub fn solve_parallel_widest(&self, current_box: BoxRegion) -> SolverResult {
+        self.solve_parallel_depth_widest(current_box, 0)
     }
 
     /// Widest interval for ablation study parallel Branch-and-Prune Loop (Rayon Fork-Join)
-    fn solve_parallel_depth_widest(
-        &self,
-        current_box: BoxRegion,
-        target: Interval,
-        depth: usize,
-    ) -> SolverResult {
-        // 1. Contract Step
-        let contracted_box = match self.contract(current_box, target) {
+    fn solve_parallel_depth_widest(&self, current_box: BoxRegion, depth: usize) -> SolverResult {
+        // 1. Contract Step (sweeps ALL constraints to a shared fixpoint)
+        let contracted_box = match self.contract(current_box) {
             Some(b) => b,
-            None => return SolverResult::Unsat,
+            None => {
+                return SolverResult::Unsat;
+            }
         };
 
         // 2. Stopping Condition Check
@@ -210,17 +255,17 @@ impl Solver {
         // 4. Parallelism Threshold:
         // If depth exceeds 12, switch to sequential execution to save Rayon join overhead
         if depth > 12 {
-            let left_res = self.solve_parallel_depth_widest(left_box, target, depth + 1);
+            let left_res = self.solve_parallel_depth_widest(left_box, depth + 1);
             if let SolverResult::Sat(_) = left_res {
                 return left_res;
             }
-            return self.solve_parallel_depth_widest(right_box, target, depth + 1);
+            return self.solve_parallel_depth_widest(right_box, depth + 1);
         }
 
         // 5. Parallel Execution via Rayon
         let (left_res, right_res) = rayon::join(
-            || self.solve_parallel_depth_widest(left_box, target, depth + 1),
-            || self.solve_parallel_depth_widest(right_box, target, depth + 1),
+            || self.solve_parallel_depth_widest(left_box, depth + 1),
+            || self.solve_parallel_depth_widest(right_box, depth + 1)
         );
 
         match (left_res, right_res) {
@@ -234,18 +279,13 @@ impl Solver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Ast, OpType};
+    use crate::ast::{ Ast, OpType };
     use std::time::Instant;
 
     fn run_with_threads<F, R>(threads: usize, f: F) -> (R, std::time::Duration)
-    where
-        F: FnOnce() -> R + Send,
-        R: Send,
+        where F: FnOnce() -> R + Send, R: Send
     {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .unwrap();
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
         let start = Instant::now();
         let res = pool.install(f);
         (res, start.elapsed())
@@ -267,11 +307,8 @@ mod tests {
         initial_box.insert("x".to_string(), Interval::new(0.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(0.0, 10.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.01);
-        let target = Interval::point(5.0).unwrap();
-
-        // Jalankan Parallel Solver!
-        let result = solver.solve_parallel(initial_box, target);
+        let solver = Solver::new_single(ast, root, Interval::point(5.0).unwrap(), 0.001);
+        let result = solver.solve_parallel(initial_box);
 
         match result {
             SolverResult::Sat(sat_box) => {
@@ -287,13 +324,89 @@ mod tests {
                 let y_mid = y_res.mid();
                 let approx = x_mid * x_mid + y_mid;
 
-                assert!(
-                    (approx - 5.0).abs() < 0.05,
-                    "Solusi terbukti memenuhi x^2 + y = 5!"
-                );
+                assert!((approx - 5.0).abs() < 0.05, "Solusi terbukti memenuhi x^2 + y = 5!");
             }
             SolverResult::Unsat => panic!("Harusnya SAT tapi ter-UNSAT!"),
         }
+    }
+
+    #[test]
+    fn test_multi_constraint_system() {
+        // Sistem 2 persamaan simultan berbagi variabel yang sama:
+        //   C1: x^2 + y = 10
+        //   C2: x - y  = 2
+        // Solusi analitik: x^2 + (x - 2) = 10 => x^2 + x - 12 = 0 => x = 3 atau x = -4
+        // Domain awal x, y ∈ [-5, 5] membuat kedua akar mungkin ditemukan.
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+
+        let x_sqr = ast.add_unary(OpType::Sqr, x);
+        let c1_root = ast.add_binary(OpType::Add, x_sqr, y);
+
+        let c2_root = ast.add_binary(OpType::Sub, x, y);
+
+        let mut initial_box = BoxRegion::default();
+        initial_box.insert("x".to_string(), Interval::new(-5.0, 5.0).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
+
+        let solver = Solver::new(
+            ast,
+            vec![
+                Constraint::new(c1_root, Interval::point(10.0).unwrap()),
+                Constraint::new(c2_root, Interval::point(2.0).unwrap())
+            ],
+            0.001
+        );
+
+        let result = solver.solve_parallel(initial_box);
+
+        match result {
+            SolverResult::Sat(sat_box) => {
+                let x_res = sat_box.get("x").unwrap();
+                let y_res = sat_box.get("y").unwrap();
+
+                let x_mid = x_res.mid();
+                let y_mid = y_res.mid();
+
+                println!("\n=== MULTI-CONSTRAINT SAT SOLUTION ===");
+                println!("x = [{:.5}, {:.5}]", x_res.low, x_res.high);
+                println!("y = [{:.5}, {:.5}]", y_res.low, y_res.high);
+
+                // Kedua constraint HARUS terpenuhi secara simultan
+                assert!(
+                    (x_mid * x_mid + y_mid - 10.0).abs() < 0.05,
+                    "C1 (x^2 + y = 10) harus terpenuhi"
+                );
+                assert!((x_mid - y_mid - 2.0).abs() < 0.05, "C2 (x - y = 2) harus terpenuhi");
+            }
+            SolverResult::Unsat =>
+                panic!("Harusnya SAT: sistem punya solusi riil (x=3,y=1) atau (x=-4,y=-6)"),
+        }
+    }
+
+    #[test]
+    fn test_multi_constraint_unsat_system() {
+        // Sistem yang inkonsisten dalam domain yang diberikan:
+        //   C1: x = 1   (domain sempit)
+        //   C2: x = 5   (kontradiksi langsung dengan C1)
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+
+        let mut initial_box = BoxRegion::default();
+        initial_box.insert("x".to_string(), Interval::new(0.0, 10.0).unwrap());
+
+        let solver = Solver::new(
+            ast,
+            vec![
+                Constraint::new(x, Interval::point(1.0).unwrap()),
+                Constraint::new(x, Interval::point(5.0).unwrap())
+            ],
+            0.001
+        );
+
+        let result = solver.solve_parallel(initial_box);
+        assert_eq!(result, SolverResult::Unsat);
     }
 
     #[test]
@@ -312,14 +425,12 @@ mod tests {
         let mut initial_box = BoxRegion::default();
         initial_box.insert(
             "x".to_string(),
-            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap()
         );
         initial_box.insert("y".to_string(), Interval::new(-2.0, 2.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.001);
-        let target = Interval::point(2.0).unwrap();
-
-        let result = solver.solve_parallel(initial_box, target);
+        let solver = Solver::new_single(ast, root, Interval::point(2.0).unwrap(), 0.00005);
+        let result = solver.solve_parallel(initial_box);
 
         match result {
             SolverResult::Sat(sat_box) => {
@@ -357,20 +468,16 @@ mod tests {
         initial_box.insert("x".to_string(), Interval::new(-10.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-10.0, 10.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.0001);
+        let solver = Solver::new_single(ast, root, Interval::point(25.0).unwrap(), 0.0001);
         let target = Interval::point(25.0).unwrap();
 
         // ----------------------------------------------------
         // 1. RUNNING SINGLE-THREADED (Memaksa Rayon pakai 1 thread)
         // ----------------------------------------------------
-        let pool_single = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
+        let pool_single = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
 
         let start_single = Instant::now();
-        let _res_single =
-            pool_single.install(|| solver.solve_parallel(initial_box.clone(), target));
+        let _res_single = pool_single.install(|| solver.solve_parallel(initial_box.clone()));
         let duration_single = start_single.elapsed();
 
         // ----------------------------------------------------
@@ -378,7 +485,7 @@ mod tests {
         // ----------------------------------------------------
         let num_cores = num_cpus::get(); // Butuh crate `num_cpus` jika mau log, atau biarkan default rayon
         let start_multi = Instant::now();
-        let _res_multi = solver.solve_parallel(initial_box, target);
+        let _res_multi = solver.solve_parallel(initial_box);
         let duration_multi = start_multi.elapsed();
 
         // ----------------------------------------------------
@@ -411,24 +518,18 @@ mod tests {
         initial_box.insert("x".to_string(), Interval::new(-10.0, 10.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-10.0, 10.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.00005);
-        let target = Interval::point(25.0).unwrap();
-
+        let solver = Solver::new_single(ast, root, Interval::point(25.0).unwrap(), 0.00005);
         let thread_counts = vec![1, 2, 4, 8, 16];
         let mut base_duration_secs = 0.0;
 
         println!("\n=============================================================");
         println!(" BENCHMARK 1: SCALABILITY SWEEP (RAYON WORK-STEALING)");
         println!("=============================================================");
-        println!(
-            "{:<10} | {:<18} | {:<12}",
-            "Threads", "Execution Time", "Speedup"
-        );
+        println!("{:<10} | {:<18} | {:<12}", "Threads", "Execution Time", "Speedup");
         println!("-------------------------------------------------------------");
 
         for &t in &thread_counts {
-            let (_, duration) =
-                run_with_threads(t, || solver.solve_parallel(initial_box.clone(), target));
+            let (_, duration) = run_with_threads(t, || solver.solve_parallel(initial_box.clone()));
 
             let dur_secs = duration.as_secs_f64();
             if t == 1 {
@@ -461,12 +562,10 @@ mod tests {
         initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.0001);
-        let target = Interval::point(17.0).unwrap();
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, root, Interval::point(17.0).unwrap(), 0.0001);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
@@ -490,21 +589,13 @@ mod tests {
         let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
 
         let mut initial_box = BoxRegion::default();
-        initial_box.insert(
-            "x".to_string(),
-            Interval::new(0.0, std::f64::consts::PI).unwrap(),
-        );
-        initial_box.insert(
-            "y".to_string(),
-            Interval::new(0.0, std::f64::consts::PI).unwrap(),
-        );
+        initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+        initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
 
-        let solver = Solver::new(ast, root, 0.0005);
-        let target = Interval::point(0.5).unwrap();
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, root, Interval::point(0.5).unwrap(), 0.0005);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
@@ -531,12 +622,10 @@ mod tests {
         initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
         initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
 
-        let solver = Solver::new(ast, root, 0.0005);
-        let target = Interval::point(0.0).unwrap();
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, root, Interval::point(0.0).unwrap(), 0.0005);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
@@ -573,7 +662,7 @@ mod tests {
         println!(
             "Total AST Memory Size    : {} bytes ({:.2} KB)",
             total_ast_bytes,
-            total_ast_bytes as f64 / 1024.0
+            (total_ast_bytes as f64) / 1024.0
         );
         println!("Zero Heap Allocation Ref : YES (Index-based Arena Allocation)");
         println!("=============================================================\n");
@@ -601,19 +690,17 @@ mod tests {
         let mut initial_box = BoxRegion::default();
         initial_box.insert(
             "t1".to_string(),
-            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap()
         );
         initial_box.insert(
             "t2".to_string(),
-            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
+            Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap()
         );
 
-        let solver = Solver::new(ast, x_pos, 0.0001);
-        let target = Interval::point(1.5).unwrap();
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, x_pos, Interval::point(1.5).unwrap(), 0.0001);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
@@ -650,12 +737,10 @@ mod tests {
         initial_box.insert("y2".to_string(), Interval::new(0.0, 5.0).unwrap());
 
         // Cek apakah ada trajectory di mana dist_sqr = 4.0 (Distance = 2.0 meter)
-        let solver = Solver::new(ast, dist_sqr, 0.0005);
-        let target = Interval::point(4.0).unwrap();
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, dist_sqr, Interval::point(4.0).unwrap(), 0.0005);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));
@@ -684,12 +769,10 @@ mod tests {
         initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
         initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap()); // Constant 10x multiplier
 
-        let solver = Solver::new(ast, exp_v, 0.0001);
-        let target = Interval::new(50.0, 100.0).unwrap(); // Target Current Range
-
-        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone(), target));
+        let solver = Solver::new_single(ast, exp_v, Interval::new(50.0, 100.0).unwrap(), 0.0001);
+        let (_, d1) = run_with_threads(1, || solver.solve_parallel(initial_box.clone()));
         let (res_multi, d_multi) = run_with_threads(num_cpus::get(), || {
-            solver.solve_parallel(initial_box, target)
+            solver.solve_parallel(initial_box)
         });
 
         assert!(matches!(res_multi, SolverResult::Sat(_)));

@@ -1,5 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use ricp::ast::{Ast, BoxRegion, OpType};
+use criterion::{ Criterion, criterion_group, criterion_main };
+use std::hint::black_box;
+use ricp::ast::{ Ast, BoxRegion, OpType };
 use ricp::interval::Interval;
 use ricp::solver::Solver;
 use std::time::Duration;
@@ -20,20 +21,18 @@ fn bench_p1_high_degree_poly(c: &mut Criterion) {
     initial_box.insert("x".to_string(), Interval::new(-3.0, 3.0).unwrap());
     initial_box.insert("y".to_string(), Interval::new(-5.0, 5.0).unwrap());
 
-    let solver = Solver::new(ast, root, 0.0001);
-    let target = Interval::point(17.0).unwrap();
-
+    let solver = Solver::new_single(ast, root, Interval::point(17.0).unwrap(), 0.0001);
     // Group untuk membandingkan AOWB vs Widest secara langsung
     let mut group = c.benchmark_group("P1_High_Degree_Poly");
     group.measurement_time(Duration::from_secs(5)); // Duration test time
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
@@ -51,28 +50,20 @@ fn bench_p2_oscillatory_trig(c: &mut Criterion) {
     let root = ast.add_binary(OpType::Mul, sin_x, sin_y);
 
     let mut initial_box = BoxRegion::default();
-    initial_box.insert(
-        "x".to_string(),
-        Interval::new(0.0, std::f64::consts::PI).unwrap(),
-    );
-    initial_box.insert(
-        "y".to_string(),
-        Interval::new(0.0, std::f64::consts::PI).unwrap(),
-    );
+    initial_box.insert("x".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
+    initial_box.insert("y".to_string(), Interval::new(0.0, std::f64::consts::PI).unwrap());
 
-    let solver = Solver::new(ast, root, 0.0005);
-    let target = Interval::point(0.5).unwrap();
-
+    let solver = Solver::new_single(ast, root, Interval::point(0.5).unwrap(), 0.0005);
     let mut group = c.benchmark_group("P2_Oscillatory_Trig");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
@@ -93,19 +84,17 @@ fn bench_p3_mixed_exp_poly(c: &mut Criterion) {
     initial_box.insert("x".to_string(), Interval::new(-2.0, 2.0).unwrap());
     initial_box.insert("y".to_string(), Interval::new(1.0, 4.0).unwrap());
 
-    let solver = Solver::new(ast, root, 0.0005);
-    let target = Interval::point(0.0).unwrap();
-
+    let solver = Solver::new_single(ast, root, Interval::point(0.0).unwrap(), 0.0005);
     let mut group = c.benchmark_group("P3_Mixed_Exp_Poly");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
@@ -125,28 +114,20 @@ fn bench_rw1_robotic_arm_ik(c: &mut Criterion) {
     let x_pos = ast.add_binary(OpType::Add, cos_t1, cos_t12);
 
     let mut initial_box = BoxRegion::default();
-    initial_box.insert(
-        "t1".to_string(),
-        Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
-    );
-    initial_box.insert(
-        "t2".to_string(),
-        Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap(),
-    );
+    initial_box.insert("t1".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
+    initial_box.insert("t2".to_string(), Interval::new(0.0, std::f64::consts::FRAC_PI_2).unwrap());
 
-    let solver = Solver::new(ast, x_pos, 0.0001);
-    let target = Interval::point(1.5).unwrap();
-
+    let solver = Solver::new_single(ast, x_pos, Interval::point(1.5).unwrap(), 0.0001);
     let mut group = c.benchmark_group("RW1_Robotic_Arm_IK");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
@@ -174,19 +155,17 @@ fn bench_rw2_drone_clearance(c: &mut Criterion) {
     initial_box.insert("x2".to_string(), Interval::new(0.0, 5.0).unwrap());
     initial_box.insert("y2".to_string(), Interval::new(0.0, 5.0).unwrap());
 
-    let solver = Solver::new(ast, dist_sqr, 0.0005);
-    let target = Interval::point(4.0).unwrap();
-
+    let solver = Solver::new_single(ast, dist_sqr, Interval::point(4.0).unwrap(), 0.0005);
     let mut group = c.benchmark_group("RW2_Drone_Clearance_4D");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
@@ -206,19 +185,17 @@ fn bench_rw3_diode_circuit_equilibrium(c: &mut Criterion) {
     initial_box.insert("v".to_string(), Interval::new(0.1, 1.0).unwrap());
     initial_box.insert("const_scale".to_string(), Interval::point(10.0).unwrap());
 
-    let solver = Solver::new(ast, exp_v, 0.0001);
-    let target = Interval::new(50.0, 100.0).unwrap();
-
+    let solver = Solver::new_single(ast, exp_v, Interval::new(50.0, 100.0).unwrap(), 0.0001);
     let mut group = c.benchmark_group("RW3_Diode_Equilibrium");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(50);
 
     group.bench_function("AOWB", |b| {
-        b.iter(|| solver.solve_parallel(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel(black_box(initial_box.clone())))
     });
 
     group.bench_function("MaxWidth", |b| {
-        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone()), black_box(target)))
+        b.iter(|| solver.solve_parallel_widest(black_box(initial_box.clone())))
     });
 
     group.finish();
