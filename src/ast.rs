@@ -148,17 +148,21 @@ impl Ast {
         &mut self,
         node_idx: usize,
         target_interval: Interval,
-        box_region: &mut BoxRegion,
+        box_region: &mut BoxRegion
     ) -> bool {
         // 1. Potong interval node saat ini dengan target_interval (Narrowing)
         let current_eval = match self.nodes[node_idx].eval_interval {
             Some(inv) => inv,
-            None => return false, // Node belum dievaluasi
+            None => {
+                return false;
+            } // Node belum dievaluasi
         };
 
         let narrowed_interval = match current_eval.intersect(&target_interval) {
             Some(inv) => inv,
-            None => return false, // UNSAT / Conflict detected!
+            None => {
+                return false;
+            } // UNSAT / Conflict detected!
         };
 
         // Update interval sementara di node ini
@@ -250,12 +254,11 @@ impl Ast {
                         } else {
                             let valid_z = Interval::new(
                                 narrowed_interval.low.max(1e-300),
-                                narrowed_interval.high,
-                            )
-                            .unwrap();
+                                narrowed_interval.high
+                            ).unwrap();
                             let ln_z = Interval {
-                                low: Interval::round_down(valid_z.low.ln()),
-                                high: Interval::round_up(valid_z.high.ln()),
+                                low: Interval::round_down_transcendental(valid_z.low.ln()),
+                                high: Interval::round_up_transcendental(valid_z.high.ln()),
                             };
                             self.backward_eval(child, ln_z, box_region)
                         }
@@ -264,17 +267,20 @@ impl Ast {
                     OpType::Sin => {
                         // z = sin(x) => untuk domain lokal [-PI/2, PI/2], x = asin(z)
                         // Nilai z HARUS berada di rentang [-1, 1]
-                        if let Some(valid_z) =
-                            narrowed_interval.intersect(&Interval::new(-1.0, 1.0).unwrap())
+                        if
+                            let Some(valid_z) = narrowed_interval.intersect(
+                                &Interval::new(-1.0, 1.0).unwrap()
+                            )
                         {
                             let asin_z = Interval {
-                                low: Interval::round_down(valid_z.low.asin()),
-                                high: Interval::round_up(valid_z.high.asin()),
+                                low: Interval::round_down_transcendental(valid_z.low.asin()),
+                                high: Interval::round_up_transcendental(valid_z.high.asin()),
                             };
 
                             // Jika domain asal anak berada di kisaran [-PI/2, PI/2]
-                            if c_eval.low >= -std::f64::consts::FRAC_PI_2
-                                && c_eval.high <= std::f64::consts::FRAC_PI_2
+                            if
+                                c_eval.low >= -std::f64::consts::FRAC_PI_2 &&
+                                c_eval.high <= std::f64::consts::FRAC_PI_2
                             {
                                 self.backward_eval(child, asin_z, box_region)
                             } else {
@@ -289,13 +295,15 @@ impl Ast {
                     OpType::Cos => {
                         // z = cos(x) => untuk domain lokal [0, PI], x = acos(z)
                         // Nilai z HARUS berada di rentang [-1, 1]
-                        if let Some(valid_z) =
-                            narrowed_interval.intersect(&Interval::new(-1.0, 1.0).unwrap())
+                        if
+                            let Some(valid_z) = narrowed_interval.intersect(
+                                &Interval::new(-1.0, 1.0).unwrap()
+                            )
                         {
                             // acos bersifat monotonically decreasing: high z -> low x
                             let acos_z = Interval {
-                                low: Interval::round_down(valid_z.high.acos()),
-                                high: Interval::round_up(valid_z.low.acos()),
+                                low: Interval::round_down_transcendental(valid_z.high.acos()),
+                                high: Interval::round_up_transcendental(valid_z.low.acos()),
                             };
 
                             // Jika domain asal anak berada di kisaran [0, PI]
@@ -372,14 +380,8 @@ mod tests {
         // Analisa Matematika:
         // x^2 = 5 - y => Karena y ∈ [0, 2], maka x^2 ∈ [3, 5]
         // Seharusnya x yang tadinya [1, 3] menguncup/terpotong menjadi [sqrt(3), sqrt(5)] ≈ [1.73, 2.23]
-        assert!(
-            new_x.low > 1.5,
-            "Bound bawah x harus naik mendekati sqrt(3)"
-        );
-        assert!(
-            new_x.high < 2.5,
-            "Bound atas x harus turun mendekati sqrt(5)"
-        );
+        assert!(new_x.low > 1.5, "Bound bawah x harus naik mendekati sqrt(3)");
+        assert!(new_x.high < 2.5, "Bound atas x harus turun mendekati sqrt(5)");
 
         println!("Contracted x: {:?}", new_x);
         println!("Contracted y: {:?}", new_y);

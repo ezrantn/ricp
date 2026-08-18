@@ -35,26 +35,15 @@ impl Solver {
     pub fn new(ast: Ast, constraints: Vec<Constraint>, delta: f64) -> Self {
         let mut sensitivity_map = FxHashMap::default();
         assert!(!constraints.is_empty(), "Solver requires at least one constraint.");
-        for node in &ast.nodes {
-            match &node.kind {
-                // Jika node adalah Unary Operator (seperti Exp, Sqr, Sin, dll)
-                NodeKind::Unary { op, child } => {
-                    if let NodeKind::Variable(ref name) = ast.nodes[*child].kind {
-                        let weight = match op {
-                            OpType::Exp => 10.0, // Non-linear amplification tinggi!
-                            OpType::Sqr => 3.0, // Amplifikasi kuadratik
-                            OpType::Sin | OpType::Cos => 2.0, // Osilatif
-                            _ => 1.0,
-                        };
-                        *sensitivity_map.entry(name.clone()).or_insert(0.0) += weight;
-                    }
-                }
-                // Jika node adalah Variable biasa (tanpa operator khusus di atasnya)
-                NodeKind::Variable(name) => {
-                    *sensitivity_map.entry(name.clone()).or_insert(0.0) += 1.0;
-                }
-                _ => {}
-            }
+        // AST occurrence-weighted sensitivity: traversal PENUH dari akar tiap
+        // constraint (bukan cuma cek parent langsung di atas variable), akumulasi
+        // additive di sepanjang path root->leaf. Ini nangkep variabel yang
+        // "terkubur" di dalam ekspresi bertingkat (mis. sin(x*y)) dan tetap
+        // menjumlah tiap occurrence terpisah kalau satu variabel dipakai di
+        // banyak subterm berbeda.
+
+        for constraint in &constraints {
+            Self::accumulate_sensitivity(&ast, constraint.root, 1.0, &mut sensitivity_map);
         }
 
         Self {
@@ -77,6 +66,49 @@ impl Solver {
             .values()
             .map(|iv| iv.width())
             .sum()
+    }
+
+    /// Kontribusi sensitivitas dari satu operator ke tiap variabel di bawahnya.
+    /// Add/Sub linear -> 0 (tidak menambah sensitivitas melebihi baseline
+    /// occurrence). Mul/Div -> coupling bilinear/nonlinear ringan. Fungsi
+    /// transcendental/kuadratik -> bobot lebih tinggi sesuai amplifikasi
+    /// non-linearnya (Exp paling curam, lalu Sqr, lalu Sin/Cos/Sqrt).
+    #[inline]
+    fn op_sensitivity_weight(op: &OpType) -> f64 {
+        match op {
+            OpType::Exp => 10.0,
+            OpType::Sqr => 3.0,
+            OpType::Sin | OpType::Cos | OpType::Sqrt => 2.0,
+            OpType::Mul | OpType::Div => 1.5,
+            OpType::Add | OpType::Sub => 0.0,
+        }
+    }
+
+    /// Traversal rekursif root->leaf, mengakumulasi path_weight (additive) ke
+    /// tiap occurrence variable yang ditemukan. Dipanggil sekali per akar
+    /// constraint supaya seluruh AST (termasuk binary ops & nested unary)
+    /// ikut terhitung, bukan cuma parent langsung di atas si variable.
+    fn accumulate_sensitivity(
+        ast: &Ast,
+        node_id: NodeId,
+        path_weight: f64,
+        map: &mut FxHashMap<String, f64>
+    ) {
+        match &ast.nodes[node_id].kind {
+            NodeKind::Constant(_) => {}
+            NodeKind::Variable(name) => {
+                *map.entry(name.clone()).or_insert(0.0) += path_weight;
+            }
+            NodeKind::Unary { op, child } => {
+                let next_weight = path_weight + Self::op_sensitivity_weight(op);
+                Self::accumulate_sensitivity(ast, *child, next_weight, map);
+            }
+            NodeKind::Binary { op, left, right } => {
+                let next_weight = path_weight + Self::op_sensitivity_weight(op);
+                Self::accumulate_sensitivity(ast, *left, next_weight, map);
+                Self::accumulate_sensitivity(ast, *right, next_weight, map);
+            }
+        }
     }
 
     fn contract_one(
@@ -407,6 +439,85 @@ mod tests {
 
         let result = solver.solve_parallel(initial_box);
         assert_eq!(result, SolverResult::Unsat);
+    }
+
+    #[test]
+    fn test_sensitivity_captures_nested_variable_not_just_direct_parent() {
+        // sin(x * y): parent LANGSUNG dari `x` dan `y` adalah Mul, bukan Unary.
+        // Skema lama (cek parent langsung) akan gagal total menaikkan bobot x/y
+        // di sini karena cuma cek NodeKind::Unary { child: Variable }. Traversal
+        // penuh sekarang harus tetap menangkap efek Sin yang membungkus Mul.
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let y = ast.add_variable("y");
+        let xy = ast.add_binary(OpType::Mul, x, y);
+        let root = ast.add_unary(OpType::Sin, xy);
+
+        let solver = Solver::new_single(ast, root, Interval::point(0.5).unwrap(), 0.01);
+
+        let x_weight = solver.sensitivity_map.get("x").copied().unwrap_or(0.0);
+        let y_weight = solver.sensitivity_map.get("y").copied().unwrap_or(0.0);
+
+        // Baseline occurrence (1.0) + Sin (2.0) + Mul (1.5) = 4.5
+        assert!(
+            (x_weight - 4.5).abs() < 1e-9,
+            "x harus dapat bobot dari Sin DAN Mul di atasnya, dapat {x_weight}"
+        );
+        assert!(
+            (y_weight - 4.5).abs() < 1e-9,
+            "y harus dapat bobot dari Sin DAN Mul di atasnya, dapat {y_weight}"
+        );
+    }
+
+    #[test]
+    fn test_sensitivity_accumulates_across_multiple_occurrences() {
+        // x dipakai 2x di subterm berbeda: exp(x) + x
+        // Occurrence pertama (di bawah Exp) harus dapat bobot lebih besar
+        // dari occurrence kedua (linear, langsung di Add), dan keduanya
+        // harus terjumlah (bukan saling menimpa/overwrite).
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let x_again = ast.add_variable("x");
+        let exp_x = ast.add_unary(OpType::Exp, x);
+        let root = ast.add_binary(OpType::Add, exp_x, x_again);
+
+        let solver = Solver::new_single(ast, root, Interval::point(1.0).unwrap(), 0.01);
+        let x_weight = solver.sensitivity_map.get("x").copied().unwrap_or(0.0);
+
+        // Occurrence 1: baseline(1.0) + Exp(10.0) + Add(0.0) = 11.0
+        // Occurrence 2: baseline(1.0) + Add(0.0)              = 1.0
+        // Total = 12.0
+        assert!(
+            (x_weight - 12.0).abs() < 1e-9,
+            "kedua occurrence x harus terjumlah, dapat {x_weight}"
+        );
+    }
+
+    #[test]
+    fn test_sensitivity_covers_all_constraints_in_system() {
+        // Sistem 2 constraint: C1 pakai exp(x), C2 pakai x biasa.
+        // sensitivity_map harus menjumlah kontribusi dari SEMUA constraint,
+        // bukan cuma constraint pertama.
+        let mut ast = Ast::new();
+        let x = ast.add_variable("x");
+        let x2 = ast.add_variable("x");
+        let exp_x = ast.add_unary(OpType::Exp, x);
+
+        let solver = Solver::new(
+            ast,
+            vec![
+                Constraint::new(exp_x, Interval::point(2.0).unwrap()),
+                Constraint::new(x2, Interval::point(0.5).unwrap())
+            ],
+            0.01
+        );
+
+        let x_weight = solver.sensitivity_map.get("x").copied().unwrap_or(0.0);
+        // C1: baseline(1.0) + Exp(10.0) = 11.0 ; C2: baseline(1.0) = 1.0 ; total 12.0
+        assert!(
+            (x_weight - 12.0).abs() < 1e-9,
+            "sensitivity harus akumulasi dari semua constraint, dapat {x_weight}"
+        );
     }
 
     #[test]
